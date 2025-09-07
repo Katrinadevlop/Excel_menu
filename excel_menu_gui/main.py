@@ -160,7 +160,7 @@ class MainWindow(QMainWindow):
         self.cmbTheme.setCurrentIndex(0)
         self.cmbTheme.currentIndexChanged.connect(self.on_theme_changed)
 
-        self.btnDownloadTemplate = QPushButton("Скачать шаблон")
+        self.btnDownloadTemplate = QPushButton("Сделать шаблон")
         self.btnDownloadTemplate.clicked.connect(self.do_download_template)
         self.btnMakePresentation = QPushButton("Сделать презентацию")
         self.btnMakePresentation.clicked.connect(self.do_make_presentation)
@@ -360,6 +360,9 @@ class MainWindow(QMainWindow):
         l1.addWidget(label_caption("Файл 1"))
         l1.addWidget(row1)
         self.grpFirst = FileDropGroup("Первый файл", self.edPath1, g1)
+        # Уменьшаем высоту панели сравнения
+        self.grpFirst.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.grpFirst.setMinimumHeight(70)
         self.contentLayout.addWidget(self.grpFirst)
         self.grpFirst.setVisible(False)
 
@@ -376,6 +379,9 @@ class MainWindow(QMainWindow):
         l2.addWidget(label_caption("Файл 2"))
         l2.addWidget(row2)
         self.grpSecond = FileDropGroup("Второй файл", self.edPath2, g2)
+        # Уменьшаем высоту второй панели сравнения
+        self.grpSecond.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.grpSecond.setMinimumHeight(70)
         self.contentLayout.addWidget(self.grpSecond)
         self.grpSecond.setVisible(False)
 
