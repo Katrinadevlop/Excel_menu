@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QMimeData, QSize
-from PySide6.QtGui import QPalette, QColor
+from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QBrush, QLinearGradient, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QTextEdit, QComboBox, QLineEdit,
@@ -55,6 +55,40 @@ def nice_group(title: str, content: QWidget) -> QGroupBox:
     return gb
 
 
+def create_app_icon() -> QIcon:
+    size = 256
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    try:
+        p.setRenderHint(QPainter.Antialiasing, True)
+        # Фон — круг с градиентом (теплые оттенки)
+        grad = QLinearGradient(0, 0, size, size)
+        grad.setColorAt(0.0, QColor("#FF7E5F"))
+        grad.setColorAt(1.0, QColor("#FD3A69"))
+        p.setBrush(QBrush(grad))
+        p.setPen(Qt.NoPen)
+        margin = 12
+        p.drawEllipse(margin, margin, size - 2 * margin, size - 2 * margin)
+
+        # Светлая окантовка
+        p.setPen(QPen(QColor(255, 255, 255, 230), 6))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(margin + 3, margin + 3, size - 2 * (margin + 3), size - 2 * (margin + 3))
+
+        # Буква "М"
+        f = QFont()
+        f.setFamily("Segoe UI")
+        f.setBold(True)
+        f.setPointSize(120)
+        p.setFont(f)
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(pix.rect(), Qt.AlignCenter, "М")
+    finally:
+        p.end()
+    return QIcon(pix)
+
+
 @dataclass
 class FileConfig:
     path: str = ""
@@ -66,7 +100,8 @@ class FileConfig:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ExcelMenu — сравнение и шаблон-ссылки")
+        self.setWindowTitle("Работа с меню")
+        self.setWindowIcon(create_app_icon())
         self.resize(1000, 760)
 
         central = QWidget()
@@ -116,7 +151,7 @@ class MainWindow(QMainWindow):
             """
         )
 
-        root.addWidget(topBar)
+        root.addWidget(nice_group("Панель управления", topBar))
 
         # File 1
         self.edPath1 = DropLineEdit()
