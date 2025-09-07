@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 
 from comparator import compare_and_highlight, get_sheet_names, ColumnParseError
 from template_linker import default_template_path
-from theme import ThemeMode, apply_theme, start_system_theme_watcher
+from theme import ThemeMode, apply_theme
 
 
 class DropLineEdit(QLineEdit):
@@ -203,21 +203,39 @@ class MainWindow(QMainWindow):
                 font-size: 14px;
                 font-weight: 600;
             }
-            /* Рамка вокруг дополнительных параметров — на 5px выше контента за счёт padding */
-            #paramsFrame {
-                border: 1px solid palette(Mid);
-                border-radius: 4px;
-                padding: 0 4px; /* вертикаль задаётся layout-ом; делаем максимально компактной */
-            }
-            /* У группы параметров нет собственной обводки — только у внутреннего фрейма */
+            /* У группы параметров компактный стиль без рамки */
             QGroupBox#paramsBox {
                 border: none;
-                margin-top: 0px;
+                margin: 0px;
+                padding: 0px;
+                font-weight: 600;
             }
             QGroupBox#paramsBox::title {
-                subcontrol-origin: margin;
+                subcontrol-origin: content;
+                subcontrol-position: top left;
                 left: 0px;
-                padding: 0px; /* без дополнительного отступа между заголовком и содержимым */
+                top: -2px; /* поднимаем заголовок вплотную к контенту */
+                padding: 0px;
+                margin: 0px;
+            }
+            /* Компактные элементы внутри параметров без рамки */
+            #paramsFrame QCheckBox, #paramsFrame QLabel {
+                padding: 2px;
+                margin: 0px 6px 0px 0px; /* небольшой горизонтальный зазор между элементами */
+            }
+            #paramsFrame QCheckBox::indicator {
+                width: 14px;
+                height: 14px; /* квадратные галочки в параметрах */
+            }
+            #paramsFrame QSpinBox {
+                min-height: 20px;
+                padding: 2px 4px;
+            }
+            /* Убираем все отступы у контейнера параметров */
+            #paramsFrame {
+                border: none;
+                padding: 0px;
+                margin: 0px;
             }
             """
         )
@@ -237,6 +255,17 @@ class MainWindow(QMainWindow):
         self.contentLayout.setSpacing(10)
         self.scrollArea.setWidget(self.contentContainer)
         root.addWidget(self.scrollArea, 1)
+
+        # Панель действий внизу (фиксированная)
+        self.actionsPanel = QWidget(); self.actionsPanel.setObjectName("actionsPanel")
+        la = QHBoxLayout(self.actionsPanel)
+        la.setContentsMargins(0, 8, 0, 0)  # небольшой отступ сверху
+        self.btnCompare = QPushButton("Сравнить и подсветить")
+        self.btnCompare.clicked.connect(self.do_compare)
+        la.addStretch(1)
+        la.addWidget(self.btnCompare)
+        root.addWidget(self.actionsPanel)
+        self.actionsPanel.setVisible(False)
 
         # File 1
         self.edPath1 = DropLineEdit()
@@ -270,10 +299,10 @@ class MainWindow(QMainWindow):
         self.contentLayout.addWidget(self.grpSecond)
         self.grpSecond.setVisible(False)
 
-        # Параметры (дополнительно) — сворачиваемая группа
+        # (дополнительно) — сворачиваемая группа
         opts = QWidget(); lo = QHBoxLayout(opts)
         lo.setContentsMargins(0, 0, 0, 0)
-        lo.setSpacing(2)
+        lo.setSpacing(8)  # немного больше для удобства чтения
         self.chkIgnoreCase = QCheckBox("Игнорировать регистр")
         self.chkIgnoreCase.setChecked(True)
         self.chkFuzzy = QCheckBox("Похожесть")
@@ -281,30 +310,24 @@ class MainWindow(QMainWindow):
         self.spinFuzzy.setEnabled(False)
         self.chkFuzzy.toggled.connect(self.spinFuzzy.setEnabled)
 
-        self.rbAuto = QRadioButton("Итоговый: авто (по дате)")
-        self.rbAuto.setChecked(True)
-        self.finalGroup = QButtonGroup(self)
-        self.finalGroup.addButton(self.rbAuto)
-
         lo.addWidget(self.chkIgnoreCase)
         lo.addWidget(self.chkFuzzy)
         lo.addWidget(QLabel("Порог:"))
         lo.addWidget(self.spinFuzzy)
         lo.addStretch(1)
-        lo.addWidget(self.rbAuto)
 
         self.paramsBox = QGroupBox("Параметры (дополнительно)")
         self.paramsBox.setObjectName("paramsBox")
         self.paramsBox.setCheckable(True)
         self.paramsBox.setChecked(False)
         lparams = QVBoxLayout(self.paramsBox)
-        lparams.setContentsMargins(0, 0, 0, 0)
-        lparams.setSpacing(0)
-        # Внутренняя рамка с компактным отступом вокруг опций
+        lparams.setContentsMargins(0, 0, 0, 0)  # полностью убираем отступы
+        lparams.setSpacing(0)  # убираем промежутки между элементами
+        # Контейнер параметров без дополнительной рамки
         self._paramsFrame = QFrame(); self._paramsFrame.setObjectName("paramsFrame")
         lf = QHBoxLayout(self._paramsFrame)
-        lf.setContentsMargins(4, 0, 4, 0)  # максимально близко к кнопке-заголовку
-        lf.setSpacing(2)
+        lf.setContentsMargins(0, 0, 0, 0)  # убираем отступы
+        lf.setSpacing(0)
         lf.addWidget(opts)
         lparams.addWidget(self._paramsFrame)
         self._paramsFrame.setVisible(False)
@@ -312,23 +335,10 @@ class MainWindow(QMainWindow):
         self.contentLayout.addWidget(self.paramsBox)
         self.paramsBox.setVisible(False)
 
-        # Действия (показываются после нажатия "Сравнить меню")
-        self.actionsPanel = QWidget(); self.actionsPanel.setObjectName("actionsPanel")
-        la = QHBoxLayout(self.actionsPanel)
-        self.btnCompare = QPushButton("Сравнить и подсветить")
-        self.btnCompare.clicked.connect(self.do_compare)
 
-        la.addStretch(1)
-        la.addWidget(self.btnCompare)
-        self.contentLayout.addWidget(self.actionsPanel)
-        self.actionsPanel.setVisible(False)
-
-
-        # Theming (follow system by default)
-        self._theme_mode = ThemeMode.SYSTEM
+        # Theming (System alias Dark by default)
+        self._theme_mode = ThemeMode.DARK  # «Системная» ведёт себя как «Тёмная»
         apply_theme(QApplication.instance(), self._theme_mode)
-        # Watch for system theme changes and apply automatically when in SYSTEM mode
-        self._theme_timer = start_system_theme_watcher(lambda light: self._on_system_theme_change(light))
 
     def log(self, msg: str):
         # Лог отключён по запросу — ничего не делаем
@@ -336,17 +346,14 @@ class MainWindow(QMainWindow):
 
     def on_theme_changed(self, idx: int):
         if idx == 0:
-            self._theme_mode = ThemeMode.SYSTEM
+            # «Системная» ведёт себя как «Тёмная», чтобы визуально не отличалась
+            self._theme_mode = ThemeMode.DARK
         elif idx == 1:
             self._theme_mode = ThemeMode.LIGHT
         else:
             self._theme_mode = ThemeMode.DARK
         apply_theme(QApplication.instance(), self._theme_mode)
 
-    def _on_system_theme_change(self, light: bool):
-        # React only if following system
-        if getattr(self, "_theme_mode", ThemeMode.SYSTEM) == ThemeMode.SYSTEM:
-            apply_theme(QApplication.instance(), self._theme_mode)
 
     def closeEvent(self, event):
         try:
@@ -399,7 +406,7 @@ class MainWindow(QMainWindow):
                     ignore_case=self.chkIgnoreCase.isChecked(),
                     use_fuzzy=self.chkFuzzy.isChecked(),
                     fuzzy_threshold=int(self.spinFuzzy.value()),
-                    final_choice=0,
+                    final_choice=2,
                 )
                 self.log(f"Готово. Совпадений: {matches}. Итоговый файл: {out_path}")
                 QMessageBox.information(self, "Готово", f"Совпадений: {matches}\nИтоговый файл: {out_path}")
@@ -416,7 +423,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, "grpSecond"):
                 self.grpSecond.setVisible(True)
             if hasattr(self, "paramsBox"):
-                # показываем группу, но оставляем свёрнутой по умолчанию
+                # показываем группу, но оставляем скрытой по умолчанию
                 self.paramsBox.setVisible(True)
                 self.paramsBox.setChecked(False)
             if hasattr(self, "actionsPanel"):
