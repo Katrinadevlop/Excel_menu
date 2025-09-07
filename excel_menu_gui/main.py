@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from comparator import compare_and_highlight, get_sheet_names, ColumnParseError
 from template_linker import default_template_path
 from theme import ThemeMode, apply_theme
+from presentation_handler import create_presentation_with_excel_data
 
 
 class DropLineEdit(QLineEdit):
@@ -237,6 +238,34 @@ class MainWindow(QMainWindow):
                 padding: 0px;
                 margin: 0px;
             }
+            /* Компактные стили для панели презентаций */
+            #presentationPanel {
+                padding: 0px;
+                margin: 0px;
+            }
+            #presentationPanel QGroupBox {
+                padding: 8px;
+                margin: 4px 0px;
+                font-weight: 600;
+            }
+            #presentationPanel QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0px 5px;
+                left: 8px;
+                top: -8px;
+            }
+            /* Компактные отступы внутри группы */
+            #presentationPanel .QWidget {
+                margin: 2px 0px;
+            }
+            #presentationPanel QLabel {
+                margin: 2px 0px;
+                padding: 0px;
+            }
+            #presentationPanel QLineEdit, #presentationPanel QPushButton {
+                margin: 2px 0px;
+            }
             """
         )
 
@@ -256,7 +285,47 @@ class MainWindow(QMainWindow):
         self.scrollArea.setWidget(self.contentContainer)
         root.addWidget(self.scrollArea, 1)
 
-        # Панель действий внизу (фиксированная)
+        # Панель для работы с презентациями
+        self.presentationPanel = QWidget()
+        self.presentationPanel.setObjectName("presentationPanel")
+        pres_layout = QVBoxLayout(self.presentationPanel)
+        pres_layout.setContentsMargins(0, 0, 0, 0)  # минимальные отступы
+        pres_layout.setSpacing(5)  # маленькое расстояние между элементами
+        
+        # Excel файл для презентации
+        self.edExcelPath = DropLineEdit()
+        self.edExcelPath.setPlaceholderText("Выберите Excel файл с меню для презентации...")
+        self.btnBrowseExcel = QPushButton("Обзор…")
+        self.btnBrowseExcel.clicked.connect(lambda: self.browse_excel_file())
+        
+        excel_row = QWidget()
+        excel_layout = QHBoxLayout(excel_row)
+        excel_layout.setContentsMargins(8, 5, 8, 5)  # добавляем отступы чтобы не обрезалось
+        excel_layout.setSpacing(8)
+        excel_layout.addWidget(self.edExcelPath, 1)
+        excel_layout.addWidget(self.btnBrowseExcel)
+        
+        excel_group = QWidget()
+        excel_group_layout = QVBoxLayout(excel_group)
+        excel_group_layout.setContentsMargins(8, 8, 8, 8)  # добавляем отступы для группы
+        excel_group_layout.setSpacing(8)
+        excel_group_layout.addWidget(label_caption("Excel файл с меню"))
+        excel_group_layout.addWidget(excel_row)
+        
+        self.grpExcelFile = FileDropGroup("Файл меню для презентации", self.edExcelPath, excel_group)
+        # Установка минимальной высоты для компактности
+        self.grpExcelFile.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # Устанавливаем минимальную высоту чтобы всё поместилось
+        self.grpExcelFile.setMinimumHeight(90)
+        pres_layout.addWidget(self.grpExcelFile)
+        
+        # Добавляем растягивающий элемент, чтобы панель была прижата к верху
+        pres_layout.addStretch(1)
+        
+        self.contentLayout.addWidget(self.presentationPanel)
+        self.presentationPanel.setVisible(False)
+        
+        # Панель действий внизу для сравнения (фиксированная)
         self.actionsPanel = QWidget(); self.actionsPanel.setObjectName("actionsPanel")
         la = QHBoxLayout(self.actionsPanel)
         la.setContentsMargins(0, 8, 0, 0)  # небольшой отступ сверху
@@ -266,6 +335,17 @@ class MainWindow(QMainWindow):
         la.addWidget(self.btnCompare)
         root.addWidget(self.actionsPanel)
         self.actionsPanel.setVisible(False)
+        
+        # Панель действий внизу для презентаций (фиксированная)
+        self.presentationActionsPanel = QWidget(); self.presentationActionsPanel.setObjectName("actionsPanel")
+        pla = QHBoxLayout(self.presentationActionsPanel)
+        pla.setContentsMargins(0, 8, 0, 0)  # небольшой отступ сверху
+        self.btnCreatePresentationWithData = QPushButton("Скачать презентацию с данными")
+        self.btnCreatePresentationWithData.clicked.connect(self.do_create_presentation_with_data)
+        pla.addStretch(1)
+        pla.addWidget(self.btnCreatePresentationWithData)
+        root.addWidget(self.presentationActionsPanel)
+        self.presentationActionsPanel.setVisible(False)
 
         # File 1
         self.edPath1 = DropLineEdit()
@@ -417,6 +497,12 @@ class MainWindow(QMainWindow):
 
     def show_compare_sections(self):
         try:
+            # Скрываем панель презентаций и её панель действий
+            if hasattr(self, "presentationPanel"):
+                self.presentationPanel.setVisible(False)
+            if hasattr(self, "presentationActionsPanel"):
+                self.presentationActionsPanel.setVisible(False)
+            
             # Показать формы сравнения и панель действий
             if hasattr(self, "grpFirst"):
                 self.grpFirst.setVisible(True)
@@ -457,19 +543,83 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", str(e))
 
     def do_make_presentation(self):
+        """Показывает панель для работы с презентациями"""
         try:
-            tpl = find_template("presentation_template.pptx")
-            if not tpl:
-                QMessageBox.information(self, "Презентация", "Шаблон презентации не найден. Положите файл presentation_template.pptx в папку templates.")
-                return
-            suggested = str(Path.home() / "презентация.pptx")
-            out_path, _ = QFileDialog.getSaveFileName(self, "Сохранить презентацию", suggested, "PowerPoint (*.pptx)")
-            if not out_path:
-                return
-            shutil.copy2(tpl, out_path)
-            QMessageBox.information(self, "Готово", f"Презентация сохранена:\n{out_path}")
+            # Скрываем другие панели
+            if hasattr(self, "grpFirst"):
+                self.grpFirst.setVisible(False)
+            if hasattr(self, "grpSecond"):
+                self.grpSecond.setVisible(False)
+            if hasattr(self, "paramsBox"):
+                self.paramsBox.setVisible(False)
+            if hasattr(self, "actionsPanel"):
+                self.actionsPanel.setVisible(False)
+            
+            # Показываем панель для работы с презентациями и её панель действий
+            if hasattr(self, "presentationPanel"):
+                self.presentationPanel.setVisible(True)
+            if hasattr(self, "presentationActionsPanel"):
+                self.presentationActionsPanel.setVisible(True)
+                
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
+    
+    def browse_excel_file(self):
+        """Выбор Excel файла для презентации"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, 
+            "Выберите Excel файл с меню", 
+            str(Path.cwd()), 
+            "Excel (*.xls *.xlsx *.xlsm);;Все файлы (*.*)"
+        )
+        if path:
+            self.edExcelPath.setText(path)
+    
+    def do_create_presentation_with_data(self):
+        """Создает презентацию с данными из Excel файла"""
+        try:
+            # Получаем путь к Excel файлу
+            excel_path = self.edExcelPath.text().strip()
+            if not excel_path:
+                QMessageBox.warning(self, "Внимание", "Выберите Excel файл с меню.")
+                return
+            
+            # Проверяем существование Excel файла
+            if not Path(excel_path).exists():
+                QMessageBox.warning(self, "Ошибка", "Указанный Excel файл не найден.")
+                return
+                
+            # Находим шаблон презентации
+            template_path = find_template("presentation_template.pptx")
+            if not template_path:
+                QMessageBox.warning(self, "Шаблон", "Шаблон презентации не найден. Положите файл presentation_template.pptx в папку templates.")
+                return
+            
+            # Выбираем путь для сохранения итоговой презентации
+            suggested = str(Path.home() / "презентация_с_меню.pptx")
+            out_path, _ = QFileDialog.getSaveFileName(
+                self, 
+                "Сохранить презентацию с меню", 
+                suggested, 
+                "PowerPoint (*.pptx)"
+            )
+            if not out_path:
+                return
+                
+            # Создаем презентацию с данными
+            success, message = create_presentation_with_excel_data(
+                template_path, 
+                excel_path, 
+                out_path
+            )
+            
+            if success:
+                QMessageBox.information(self, "Готово", f"Презентация создана успешно!\n{message}\nФайл: {out_path}")
+            else:
+                QMessageBox.warning(self, "Ошибка", f"Не удалось создать презентацию:\n{message}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
     def do_brokerage_journal(self):
         try:
