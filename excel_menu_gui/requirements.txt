@@ -1,0 +1,5 @@
+PySide6
+openpyxl
+xlrd==1.2.0
+xlwings
+
