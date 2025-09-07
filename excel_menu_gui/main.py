@@ -238,35 +238,6 @@ class MainWindow(QMainWindow):
                 padding: 0px;
                 margin: 0px;
             }
-            /* Компактные стили для панели презентаций */
-            #presentationPanel {
-                padding: 0px;
-                margin: 0px;
-            }
-            #presentationPanel QGroupBox {
-                padding: 8px;
-                margin: 4px 0px;
-                font-weight: 600;
-            }
-            #presentationPanel QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0px 5px;
-                margin: 10px 0px;
-                left: 8px;
-                top: -8px;
-            }
-            /* Компактные отступы внутри группы */
-            #presentationPanel .QWidget {
-                margin: 2px 0px;
-            }
-            #presentationPanel QLabel {
-                margin: 2px 0px;
-                padding: 0px;
-            }
-            #presentationPanel QLineEdit, #presentationPanel QPushButton {
-                margin: 2px 0px;
-            }
             """
         )
 
@@ -286,45 +257,26 @@ class MainWindow(QMainWindow):
         self.scrollArea.setWidget(self.contentContainer)
         root.addWidget(self.scrollArea, 1)
 
-        # Панель для работы с презентациями
-        self.presentationPanel = QWidget()
-        self.presentationPanel.setObjectName("presentationPanel")
-        pres_layout = QVBoxLayout(self.presentationPanel)
-        pres_layout.setContentsMargins(0, 10, 0, 0)  # отступ 10px сверху
-        pres_layout.setSpacing(5)  # маленькое расстояние между элементами
-        
-        # Excel файл для презентации
+        # Excel файл для презентации (используем тот же стиль, что и для файлов сравнения)
         self.edExcelPath = DropLineEdit()
         self.edExcelPath.setPlaceholderText("Выберите Excel файл с меню для презентации...")
         self.btnBrowseExcel = QPushButton("Обзор…")
         self.btnBrowseExcel.clicked.connect(lambda: self.browse_excel_file())
-        
-        excel_row = QWidget()
-        excel_layout = QHBoxLayout(excel_row)
-        excel_layout.setContentsMargins(8, 5, 8, 5)  # добавляем отступы чтобы не обрезалось
-        excel_layout.setSpacing(8)
+
+        excel_row = QWidget(); excel_layout = QHBoxLayout(excel_row)
         excel_layout.addWidget(self.edExcelPath, 1)
-        self.btnBrowseExcel.setFixedSize(80, 30)  # фиксированный размер кнопки
         excel_layout.addWidget(self.btnBrowseExcel)
-        
-        excel_group = QWidget()
-        excel_group_layout = QVBoxLayout(excel_group)
-        excel_group_layout.setContentsMargins(8, 8, 8, 8)  # добавляем отступы для группы
-        excel_group_layout.setSpacing(8)
+
+        excel_group = QWidget(); excel_group_layout = QVBoxLayout(excel_group)
         excel_group_layout.addWidget(label_caption("Excel файл с меню"))
         excel_group_layout.addWidget(excel_row)
         
         self.grpExcelFile = FileDropGroup("Файл меню для презентации", self.edExcelPath, excel_group)
-        # Установка минимальной высоты для компактности
+        # Делаем такую же компактную высоту и отступы, как у панелей сравнения
         self.grpExcelFile.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.grpExcelFile.setMinimumHeight(130)
-        pres_layout.addWidget(self.grpExcelFile)
-        
-        # Добавляем растягивающий элемент, чтобы панель была прижата к верху
-        pres_layout.addStretch(1)
-        
-        self.contentLayout.addWidget(self.presentationPanel)
-        self.presentationPanel.setVisible(False)
+        self.grpExcelFile.setMinimumHeight(95)
+        self.contentLayout.addWidget(self.grpExcelFile)
+        self.grpExcelFile.setVisible(False)
         
         # Панель действий внизу для сравнения (фиксированная)
         self.actionsPanel = QWidget(); self.actionsPanel.setObjectName("actionsPanel")
@@ -508,8 +460,8 @@ class MainWindow(QMainWindow):
     def show_compare_sections(self):
         try:
             # Скрываем панель презентаций и её панель действий
-            if hasattr(self, "presentationPanel"):
-                self.presentationPanel.setVisible(False)
+            if hasattr(self, "grpExcelFile"):
+                self.grpExcelFile.setVisible(False)
             if hasattr(self, "presentationActionsPanel"):
                 self.presentationActionsPanel.setVisible(False)
             
@@ -566,8 +518,8 @@ class MainWindow(QMainWindow):
                 self.actionsPanel.setVisible(False)
             
             # Показываем панель для работы с презентациями и её панель действий
-            if hasattr(self, "presentationPanel"):
-                self.presentationPanel.setVisible(True)
+            if hasattr(self, "grpExcelFile"):
+                self.grpExcelFile.setVisible(True)
             if hasattr(self, "presentationActionsPanel"):
                 self.presentationActionsPanel.setVisible(True)
                 
