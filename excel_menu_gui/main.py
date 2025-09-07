@@ -252,6 +252,7 @@ class MainWindow(QMainWindow):
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
                 padding: 0px 5px;
+                margin: 10px 0px;
                 left: 8px;
                 top: -8px;
             }
@@ -281,7 +282,7 @@ class MainWindow(QMainWindow):
         self.contentContainer = QWidget()
         self.contentLayout = QVBoxLayout(self.contentContainer)
         self.contentLayout.setContentsMargins(0, 0, 0, 0)
-        self.contentLayout.setSpacing(10)
+        self.contentLayout.setSpacing(0)
         self.scrollArea.setWidget(self.contentContainer)
         root.addWidget(self.scrollArea, 1)
 
@@ -289,7 +290,7 @@ class MainWindow(QMainWindow):
         self.presentationPanel = QWidget()
         self.presentationPanel.setObjectName("presentationPanel")
         pres_layout = QVBoxLayout(self.presentationPanel)
-        pres_layout.setContentsMargins(0, 0, 0, 0)  # минимальные отступы
+        pres_layout.setContentsMargins(0, 10, 0, 0)  # отступ 10px сверху
         pres_layout.setSpacing(5)  # маленькое расстояние между элементами
         
         # Excel файл для презентации
@@ -303,6 +304,7 @@ class MainWindow(QMainWindow):
         excel_layout.setContentsMargins(8, 5, 8, 5)  # добавляем отступы чтобы не обрезалось
         excel_layout.setSpacing(8)
         excel_layout.addWidget(self.edExcelPath, 1)
+        self.btnBrowseExcel.setFixedSize(80, 30)  # фиксированный размер кнопки
         excel_layout.addWidget(self.btnBrowseExcel)
         
         excel_group = QWidget()
@@ -315,8 +317,7 @@ class MainWindow(QMainWindow):
         self.grpExcelFile = FileDropGroup("Файл меню для презентации", self.edExcelPath, excel_group)
         # Установка минимальной высоты для компактности
         self.grpExcelFile.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        # Устанавливаем минимальную высоту чтобы всё поместилось
-        self.grpExcelFile.setMinimumHeight(90)
+        self.grpExcelFile.setMinimumHeight(130)
         pres_layout.addWidget(self.grpExcelFile)
         
         # Добавляем растягивающий элемент, чтобы панель была прижата к верху
@@ -328,7 +329,7 @@ class MainWindow(QMainWindow):
         # Панель действий внизу для сравнения (фиксированная)
         self.actionsPanel = QWidget(); self.actionsPanel.setObjectName("actionsPanel")
         la = QHBoxLayout(self.actionsPanel)
-        la.setContentsMargins(0, 8, 0, 0)  # небольшой отступ сверху
+        la.setContentsMargins(0, 2, 0, 0)  # минимальный отступ сверху
         self.btnCompare = QPushButton("Сравнить и подсветить")
         self.btnCompare.clicked.connect(self.do_compare)
         la.addStretch(1)
@@ -362,7 +363,7 @@ class MainWindow(QMainWindow):
         self.grpFirst = FileDropGroup("Первый файл", self.edPath1, g1)
         # Уменьшаем высоту панели сравнения
         self.grpFirst.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.grpFirst.setMinimumHeight(70)
+        self.grpFirst.setMinimumHeight(45)
         self.contentLayout.addWidget(self.grpFirst)
         self.grpFirst.setVisible(False)
 
@@ -381,7 +382,7 @@ class MainWindow(QMainWindow):
         self.grpSecond = FileDropGroup("Второй файл", self.edPath2, g2)
         # Уменьшаем высоту второй панели сравнения
         self.grpSecond.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.grpSecond.setMinimumHeight(70)
+        self.grpSecond.setMinimumHeight(45)
         self.contentLayout.addWidget(self.grpSecond)
         self.grpSecond.setVisible(False)
 
@@ -406,6 +407,9 @@ class MainWindow(QMainWindow):
         self.paramsBox.setObjectName("paramsBox")
         self.paramsBox.setCheckable(True)
         self.paramsBox.setChecked(False)
+        # Устанавливаем компактную высоту для панели параметров
+        self.paramsBox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.paramsBox.setMaximumHeight(40)
         lparams = QVBoxLayout(self.paramsBox)
         lparams.setContentsMargins(0, 0, 0, 0)  # полностью убираем отступы
         lparams.setSpacing(0)  # убираем промежутки между элементами
