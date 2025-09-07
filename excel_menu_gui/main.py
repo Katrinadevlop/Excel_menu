@@ -173,15 +173,13 @@ class MainWindow(QMainWindow):
             #topBar QLabel {
                 font-weight: 600;
             }
-            /* Параметры: рамка только при раскрытии */
-            #paramsBox {
-                border: 1px solid palette(Mid);
-                border-radius: 8px;
-                margin-top: 8px;
+            /* Кнопка после параметров — стиль как на панели управления */
+            #actionsPanel QPushButton {
+                padding: 6px 12px;
+                font-size: 14px;
+                font-weight: 600;
             }
-            #paramsBox[checked=\"false\"] {
-                border: none;
-            }
+            
             """
         )
 
@@ -205,25 +203,14 @@ class MainWindow(QMainWindow):
         self.edPath1 = DropLineEdit()
         self.btnBrowse1 = QPushButton("Обзор…")
         self.btnBrowse1.clicked.connect(lambda: self.browse_file(self.edPath1, which=1))
-        self.edCol1 = QLineEdit("A")
-        self.edCol1.setMaximumWidth(60)
-        self.spinHdr1 = QSpinBox()
-        self.spinHdr1.setRange(1, 10000)
-        self.spinHdr1.setValue(1)
 
         row1 = QWidget(); r1 = QHBoxLayout(row1)
         r1.addWidget(self.edPath1, 1)
         r1.addWidget(self.btnBrowse1)
-        row1b = QWidget(); r1b = QHBoxLayout(row1b)
-        r1b.addWidget(label_caption("Колонка блюд:"))
-        r1b.addWidget(self.edCol1)
-        r1b.addWidget(label_caption("Строка заголовка:"))
-        r1b.addWidget(self.spinHdr1)
 
         g1 = QWidget(); l1 = QVBoxLayout(g1)
         l1.addWidget(label_caption("Файл 1"))
         l1.addWidget(row1)
-        l1.addWidget(row1b)
         self.grpFirst = nice_group("Первый файл", g1)
         self.contentLayout.addWidget(self.grpFirst)
         self.grpFirst.setVisible(False)
@@ -232,29 +219,22 @@ class MainWindow(QMainWindow):
         self.edPath2 = DropLineEdit()
         self.btnBrowse2 = QPushButton("Обзор…")
         self.btnBrowse2.clicked.connect(lambda: self.browse_file(self.edPath2, which=2))
-        self.edCol2 = QLineEdit("A")
-        self.edCol2.setMaximumWidth(60)
-        self.spinHdr2 = QSpinBox(); self.spinHdr2.setRange(1, 10000); self.spinHdr2.setValue(1)
 
         row2 = QWidget(); r2 = QHBoxLayout(row2)
         r2.addWidget(self.edPath2, 1)
         r2.addWidget(self.btnBrowse2)
-        row2b = QWidget(); r2b = QHBoxLayout(row2b)
-        r2b.addWidget(label_caption("Колонка блюд:"))
-        r2b.addWidget(self.edCol2)
-        r2b.addWidget(label_caption("Строка заголовка:"))
-        r2b.addWidget(self.spinHdr2)
 
         g2 = QWidget(); l2 = QVBoxLayout(g2)
         l2.addWidget(label_caption("Файл 2"))
         l2.addWidget(row2)
-        l2.addWidget(row2b)
         self.grpSecond = nice_group("Второй файл", g2)
         self.contentLayout.addWidget(self.grpSecond)
         self.grpSecond.setVisible(False)
 
         # Параметры (дополнительно) — сворачиваемая группа
         opts = QWidget(); lo = QHBoxLayout(opts)
+        lo.setContentsMargins(0, 0, 0, 0)
+        lo.setSpacing(8)
         self.chkIgnoreCase = QCheckBox("Игнорировать регистр")
         self.chkIgnoreCase.setChecked(True)
         self.chkFuzzy = QCheckBox("Похожесть")
@@ -279,14 +259,18 @@ class MainWindow(QMainWindow):
         self.paramsBox.setCheckable(True)
         self.paramsBox.setChecked(False)
         lparams = QVBoxLayout(self.paramsBox)
+        lparams.setContentsMargins(8, 2, 8, 8)
+        lparams.setSpacing(6)
         lparams.addWidget(opts)
         opts.setVisible(False)
-        self.paramsBox.toggled.connect(opts.setVisible)
+        self._optsWidget = opts
+        self.paramsBox.toggled.connect(self.on_params_toggled)
         self.contentLayout.addWidget(self.paramsBox)
         self.paramsBox.setVisible(False)
 
         # Действия (показываются после нажатия "Сравнить меню")
-        self.actionsPanel = QWidget(); la = QHBoxLayout(self.actionsPanel)
+        self.actionsPanel = QWidget(); self.actionsPanel.setObjectName("actionsPanel")
+        la = QHBoxLayout(self.actionsPanel)
         self.btnCompare = QPushButton("Сравнить и подсветить")
         self.btnCompare.clicked.connect(self.do_compare)
 
@@ -364,10 +348,10 @@ class MainWindow(QMainWindow):
                 out_path, matches = compare_and_highlight(
                     path1=p1, sheet1=s1,
                     path2=p2, sheet2=s2,
-                    col1=self.edCol1.text().strip() or "A",
-                    col2=self.edCol2.text().strip() or "A",
-                    header_row1=self.spinHdr1.value(),
-                    header_row2=self.spinHdr2.value(),
+                    col1="A",
+                    col2="E",
+                    header_row1=1,
+                    header_row2=1,
                     ignore_case=self.chkIgnoreCase.isChecked(),
                     use_fuzzy=self.chkFuzzy.isChecked(),
                     fuzzy_threshold=int(self.spinFuzzy.value()),
@@ -391,6 +375,29 @@ class MainWindow(QMainWindow):
                 self.paramsBox.setVisible(True)
             if hasattr(self, "actionsPanel"):
                 self.actionsPanel.setVisible(True)
+            # при первом открытии сразу раскрыть параметры, дать рамку и прокрутить к ним
+            if hasattr(self, "paramsBox") and hasattr(self, "_optsWidget"):
+                if not self.paramsBox.isChecked():
+                    self.paramsBox.setChecked(True)
+                # Установим рамку при раскрытии
+                self.paramsBox.setStyleSheet("QGroupBox#paramsBox{border:1px solid palette(Mid);border-radius:8px;margin-top:8px;}")
+                if hasattr(self, "scrollArea"):
+                    self.scrollArea.ensureWidgetVisible(self._optsWidget)
+        except Exception:
+            pass
+
+    def on_params_toggled(self, checked: bool):
+        try:
+            if hasattr(self, "_optsWidget"):
+                self._optsWidget.setVisible(checked)
+            # Динамически меняем рамку группы
+            if hasattr(self, "paramsBox"):
+                if checked:
+                    self.paramsBox.setStyleSheet("QGroupBox#paramsBox{border:1px solid palette(Mid);border-radius:8px;margin-top:8px;}")
+                else:
+                    self.paramsBox.setStyleSheet("QGroupBox#paramsBox{border:none;}")
+            if checked and hasattr(self, "scrollArea") and hasattr(self, "_optsWidget"):
+                self.scrollArea.ensureWidgetVisible(self._optsWidget)
         except Exception:
             pass
 

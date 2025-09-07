@@ -304,6 +304,50 @@ def _extract_best_date_from_file(path: str, sheet_name: Optional[str]) -> Option
     return min(candidates)
 
 
+def _find_category_ranges(values: List[List[Optional[str]]], synonyms_map: dict) -> dict:
+    """Возвращает {canonical_key: (start_row_inclusive, end_row_inclusive)} в 1-базисе.
+    Ищет по синонимам (ключи словаря), возвращает диапазоны по каноническим ключам (значения словаря).
+    Пример: 'салаты', 'холодные закуски' -> 'салаты и холодные закуски'.
+    """
+    marker_rows = []  # list of (row1based, canonical_key)
+    for r, row in enumerate(values, start=1):
+        row_join = ' '.join([str(c) for c in row if c not in (None, '')])
+        s = normalize(row_join, True)
+        found = None
+        for syn, canon in synonyms_map.items():
+            if syn in s:
+                found = canon
+                break
+        if found:
+            marker_rows.append((r, found))
+    # Сортировка по строкам
+    marker_rows.sort(key=lambda x: x[0])
+    ranges = {}
+    for i, (r, mk) in enumerate(marker_rows):
+        start = r + 1  # после заголовка
+        end = (marker_rows[i + 1][0] - 1) if i + 1 < len(marker_rows) else len(values)
+        if start <= end and mk not in ranges:
+            ranges[mk] = (start, end)
+    return ranges
+
+
+def _choose_column_for_block(values: List[List[Optional[str]]], start: int, end: int) -> str:
+    """Эвристика выбора колонки для блока: сравнивает заполненность A и E, берёт более заполненную.
+    start/end 1-базисные.
+    """
+    def non_empty_in_col(idx0: int) -> int:
+        cnt = 0
+        for r in range(start, end + 1):
+            row = values[r - 1] if r - 1 < len(values) else []
+            v = row[idx0] if idx0 < len(row) else None
+            if normalize_dish(v, True):
+                cnt += 1
+        return cnt
+    a_cnt = non_empty_in_col(col_to_index0('A'))
+    e_cnt = non_empty_in_col(col_to_index0('E'))
+    return 'A' if a_cnt >= e_cnt else 'E'
+
+
 def compare_and_highlight(
     path1: str,
     sheet1: str,
@@ -319,56 +363,127 @@ def compare_and_highlight(
     final_choice: int,  # 0=auto by date (implemented), 1=first, 2=second
 ) -> Tuple[str, int]:
     """
-    Возвращает (out_path, matches). Итоговый файл выбирается по выбору пользователя
-    либо автоматически по дате (последняя дата относительно сегодняшнего дня).
-    Подсветка — красным весь текст ячейки (без пословной подсветки).
+    Сравнение по категориям 'ЗАВТРАКИ' (столбец A) и 'ПЕРВЫЕ БЛЮДА' (столбец E).
+    Внутри каждой категории сравниваем значения в соответствующем столбце построчно от заголовка до следующей категории/конца листа.
+    При отсутствии маркеров — используем прежнюю логику с одиночной колонкой.
+    Возвращает (out_path, matches).
     """
     # determine final/ref based on choice
     if final_choice == 1:
-        final_path, final_sheet, final_col, final_hdr = path1, sheet1, col1, header_row1
-        ref_path, ref_sheet, ref_col, ref_hdr = path2, sheet2, col2, header_row2
+        final_path, final_sheet = path1, sheet1
+        ref_path, ref_sheet = path2, sheet2
     elif final_choice == 2:
-        final_path, final_sheet, final_col, final_hdr = path2, sheet2, col2, header_row2
-        ref_path, ref_sheet, ref_col, ref_hdr = path1, sheet1, col1, header_row1
+        final_path, final_sheet = path2, sheet2
+        ref_path, ref_sheet = path1, sheet1
     else:
-        # auto by date: определить корректно последнюю дату относительно сегодня
         d1 = _extract_best_date_from_file(path1, sheet1)
         d2 = _extract_best_date_from_file(path2, sheet2)
         if d1 and d2:
-            # выбираем файл с более поздней датой
             if d2 >= d1:
-                final_path, final_sheet, final_col, final_hdr = path2, sheet2, col2, header_row2
-                ref_path, ref_sheet, ref_col, ref_hdr = path1, sheet1, col1, header_row1
+                final_path, final_sheet = path2, sheet2
+                ref_path, ref_sheet = path1, sheet1
             else:
-                final_path, final_sheet, final_col, final_hdr = path1, sheet1, col1, header_row1
-                ref_path, ref_sheet, ref_col, ref_hdr = path2, sheet2, col2, header_row2
+                final_path, final_sheet = path1, sheet1
+                ref_path, ref_sheet = path2, sheet2
         elif d1 and not d2:
-            final_path, final_sheet, final_col, final_hdr = path1, sheet1, col1, header_row1
-            ref_path, ref_sheet, ref_col, ref_hdr = path2, sheet2, col2, header_row2
+            final_path, final_sheet = path1, sheet1
+            ref_path, ref_sheet = path2, sheet2
         elif d2 and not d1:
-            final_path, final_sheet, final_col, final_hdr = path2, sheet2, col2, header_row2
-            ref_path, ref_sheet, ref_col, ref_hdr = path1, sheet1, col1, header_row1
+            final_path, final_sheet = path2, sheet2
+            ref_path, ref_sheet = path1, sheet1
         else:
-            # fallback: если дату не нашли нигде — как раньше (второй как итоговый)
-            final_path, final_sheet, final_col, final_hdr = path2, sheet2, col2, header_row2
-            ref_path, ref_sheet, ref_col, ref_hdr = path1, sheet1, col1, header_row1
+            final_path, final_sheet = path2, sheet2
+            ref_path, ref_sheet = path1, sheet1
 
-    # load reference set
+    # Синонимы -> канонические категории
+    synonyms_map = {
+        "завтраки": "завтраки",
+        "первые блюда": "первые блюда",
+        "салаты": "салаты и холодные закуски",
+        "холодные закуски": "салаты и холодные закуски",
+        "салаты и холодные закуски": "салаты и холодные закуски",
+        "блюда из мяса": "блюда из мяса",
+        "блюда из птицы": "блюда из птицы",
+        "блюда из рыбы": "блюда из рыбы",
+        "гарниры": "гарниры",
+    }
+
+    # Считаем диапазоны категорий в эталонном и итоговом файлах
     ref_vals = read_cell_values(ref_path, ref_sheet)
-    ref_idx = col_to_index0(ref_col)
-    ref_set: Set[str] = set()
-    for r in range(max(0, ref_hdr), len(ref_vals)):
-        row = ref_vals[r] if r < len(ref_vals) else []
-        v = row[ref_idx] if ref_idx < len(row) else None
-        name = normalize_dish(v, ignore_case)
-        if name:
-            ref_set.add(name)
+    final_xlsx = ensure_xlsx(final_path)
+    wb = openpyxl.load_workbook(final_xlsx)
+    sh = wb[final_sheet]
 
-    def is_match(dish: str) -> bool:
+    final_vals = []
+    for row in sh.iter_rows(values_only=True):
+        final_vals.append([None if v is None else str(v) for v in row])
+
+    ref_ranges = _find_category_ranges(ref_vals, synonyms_map)
+    final_ranges = _find_category_ranges(final_vals, synonyms_map)
+
+    # Если категории не обнаружены — fallback к старой логике одной колонки
+    if not ref_ranges or not final_ranges:
+        # load reference set по прежней колонке (col2 как ref, кол1 как final), используя входные col1/col2
+        ref_idx = col_to_index0(col2)
+        ref_set: Set[str] = set()
+        for r in range(max(0, header_row2), len(ref_vals)):
+            row = ref_vals[r] if r < len(ref_vals) else []
+            v = row[ref_idx] if ref_idx < len(row) else None
+            name = normalize_dish(v, ignore_case)
+            if name:
+                ref_set.add(name)
+
+        def is_match_fallback(dish: str) -> bool:
+            if not use_fuzzy:
+                return dish in ref_set
+            best = 0
+            for s in ref_set:
+                sim = sim_percent(dish, s)
+                if sim > best:
+                    best = sim
+                if best >= fuzzy_threshold:
+                    return True
+            return best >= fuzzy_threshold
+
+        from openpyxl.styles import Font
+        red_font = Font(color="FF0000")
+        idx_final = col_to_index0(col1)
+        matches = 0
+        for r in range(1, sh.max_row + 1):
+            if r <= max(1, header_row1):
+                continue
+            cell = sh.cell(row=r, column=idx_final + 1)
+            text = normalize_dish(str(cell.value) if cell.value is not None else '', ignore_case)
+            if text and is_match_fallback(text):
+                cell.font = red_font
+                matches += 1
+        out_path = make_final_output_path(final_xlsx)
+        wb.save(out_path)
+        wb.close()
+        return out_path, matches
+
+    # Построим множества по категориям из ref, выбирая колонку A или E по заполненности блока
+    ref_sets: dict = {}
+    ref_cols_used: dict = {}
+    for cat, (start, end) in ref_ranges.items():
+        col_letter = _choose_column_for_block(ref_vals, start, end)
+        ref_cols_used[cat] = col_letter
+        idx = col_to_index0(col_letter)
+        items: Set[str] = set()
+        for r in range(start, min(end, len(ref_vals)) + 1):
+            row = ref_vals[r - 1] if r - 1 < len(ref_vals) else []
+            v = row[idx] if idx < len(row) else None
+            name = normalize_dish(v, ignore_case)
+            if name:
+                items.add(name)
+        ref_sets[cat] = items
+
+    def is_match_cat(cat: str, dish: str) -> bool:
+        sset = ref_sets.get(cat, set())
         if not use_fuzzy:
-            return dish in ref_set
+            return dish in sset
         best = 0
-        for s in ref_set:
+        for s in sset:
             sim = sim_percent(dish, s)
             if sim > best:
                 best = sim
@@ -376,28 +491,20 @@ def compare_and_highlight(
                 return True
         return best >= fuzzy_threshold
 
-    # ensure final workbook is xlsx for writing styles
-    final_xlsx = ensure_xlsx(final_path)
-    wb = openpyxl.load_workbook(final_xlsx)
-    sh = wb[final_sheet]
-
-    matches = 0
-    idx = col_to_index0(final_col)
     from openpyxl.styles import Font
     red_font = Font(color="FF0000")
 
-    for r in range(sh.min_row, sh.max_row + 1):
-        if r <= max(1, final_hdr):
-            continue
-        cell = sh.cell(row=r, column=idx + 1)
-        original = cell.value
-        text = normalize_dish(str(original) if original is not None else '', ignore_case)
-        if not text:
-            continue
-        if is_match(text):
-            # окрасим весь текст ячейки (упрощение относительно пословной подсветки)
-            cell.font = red_font
-            matches += 1
+    matches = 0
+    for cat, (start, end) in final_ranges.items():
+        # Используем ту же колонку, что и в ref, если она была определена, иначе выберем по заполненности в final
+        col_letter = ref_cols_used.get(cat) or _choose_column_for_block(final_vals, start, end)
+        idx = col_to_index0(col_letter)
+        for r in range(start, min(end, sh.max_row) + 1):
+            cell = sh.cell(row=r, column=idx + 1)
+            text = normalize_dish(str(cell.value) if cell.value is not None else '', ignore_case)
+            if text and is_match_cat(cat, text):
+                cell.font = red_font
+                matches += 1
 
     out_path = make_final_output_path(final_xlsx)
     wb.save(out_path)
@@ -408,4 +515,31 @@ def compare_and_highlight(
 def make_final_output_path(original_path: str) -> str:
     p = Path(original_path)
     return str(p.with_name(p.stem + "_final" + p.suffix))
+
+
+def auto_header_row_by_markers(path: str, sheet_name: str) -> int:
+    """
+    Ищет строки-маркеры (например, 'ЗАВТРАКИ', 'ПЕРВЫЕ БЛЮДА') и возвращает номер строки заголовка,
+    после которой начинается сравнение (то есть саму строку маркера).
+    Если найдено несколько таких строк, берём первую сверху. Если не найдено — 1.
+    """
+    markers = ["завтраки", "первые блюда"]
+    try:
+        vals = read_cell_values(path, sheet_name)
+    except Exception:
+        return 1
+    best = None
+    max_scan = min(len(vals), 500)
+    for r in range(max_scan):
+        row = vals[r]
+        for cell in row:
+            if cell is None:
+                continue
+            s = normalize(str(cell), ignore_case=True)
+            if any(m in s for m in markers):
+                best = r + 1  # 1-based
+                break
+        if best is not None:
+            break
+    return best if best is not None else 1
 
