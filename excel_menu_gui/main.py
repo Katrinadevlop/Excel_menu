@@ -55,6 +55,30 @@ def nice_group(title: str, content: QWidget) -> QGroupBox:
     return gb
 
 
+class FileDropGroup(QGroupBox):
+    def __init__(self, title: str, target_line_edit: QLineEdit, content: QWidget, parent=None):
+        super().__init__(title, parent)
+        self._target = target_line_edit
+        self.setAcceptDrops(True)
+        lay = QVBoxLayout(self)
+        lay.addWidget(content)
+
+    def dragEnterEvent(self, event):
+        md: QMimeData = event.mimeData()
+        if md.hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls:
+            local = urls[0].toLocalFile()
+            if local:
+                self._target.setText(local)
+        event.acceptProposedAction()
+
+
 def create_app_icon() -> QIcon:
     size = 256
     pix = QPixmap(size, size)
@@ -179,7 +203,22 @@ class MainWindow(QMainWindow):
                 font-size: 14px;
                 font-weight: 600;
             }
-            
+            /* Рамка вокруг дополнительных параметров — на 5px выше контента за счёт padding */
+            #paramsFrame {
+                border: 1px solid palette(Mid);
+                border-radius: 4px;
+                padding: 0 4px; /* вертикаль задаётся layout-ом; делаем максимально компактной */
+            }
+            /* У группы параметров нет собственной обводки — только у внутреннего фрейма */
+            QGroupBox#paramsBox {
+                border: none;
+                margin-top: 0px;
+            }
+            QGroupBox#paramsBox::title {
+                subcontrol-origin: margin;
+                left: 0px;
+                padding: 0px; /* без дополнительного отступа между заголовком и содержимым */
+            }
             """
         )
 
@@ -211,7 +250,7 @@ class MainWindow(QMainWindow):
         g1 = QWidget(); l1 = QVBoxLayout(g1)
         l1.addWidget(label_caption("Файл 1"))
         l1.addWidget(row1)
-        self.grpFirst = nice_group("Первый файл", g1)
+        self.grpFirst = FileDropGroup("Первый файл", self.edPath1, g1)
         self.contentLayout.addWidget(self.grpFirst)
         self.grpFirst.setVisible(False)
 
@@ -227,14 +266,14 @@ class MainWindow(QMainWindow):
         g2 = QWidget(); l2 = QVBoxLayout(g2)
         l2.addWidget(label_caption("Файл 2"))
         l2.addWidget(row2)
-        self.grpSecond = nice_group("Второй файл", g2)
+        self.grpSecond = FileDropGroup("Второй файл", self.edPath2, g2)
         self.contentLayout.addWidget(self.grpSecond)
         self.grpSecond.setVisible(False)
 
         # Параметры (дополнительно) — сворачиваемая группа
         opts = QWidget(); lo = QHBoxLayout(opts)
         lo.setContentsMargins(0, 0, 0, 0)
-        lo.setSpacing(8)
+        lo.setSpacing(2)
         self.chkIgnoreCase = QCheckBox("Игнорировать регистр")
         self.chkIgnoreCase.setChecked(True)
         self.chkFuzzy = QCheckBox("Похожесть")
@@ -259,11 +298,16 @@ class MainWindow(QMainWindow):
         self.paramsBox.setCheckable(True)
         self.paramsBox.setChecked(False)
         lparams = QVBoxLayout(self.paramsBox)
-        lparams.setContentsMargins(8, 2, 8, 8)
-        lparams.setSpacing(6)
-        lparams.addWidget(opts)
-        opts.setVisible(False)
-        self._optsWidget = opts
+        lparams.setContentsMargins(0, 0, 0, 0)
+        lparams.setSpacing(0)
+        # Внутренняя рамка с компактным отступом вокруг опций
+        self._paramsFrame = QFrame(); self._paramsFrame.setObjectName("paramsFrame")
+        lf = QHBoxLayout(self._paramsFrame)
+        lf.setContentsMargins(4, 0, 4, 0)  # максимально близко к кнопке-заголовку
+        lf.setSpacing(2)
+        lf.addWidget(opts)
+        lparams.addWidget(self._paramsFrame)
+        self._paramsFrame.setVisible(False)
         self.paramsBox.toggled.connect(self.on_params_toggled)
         self.contentLayout.addWidget(self.paramsBox)
         self.paramsBox.setVisible(False)
@@ -372,32 +416,20 @@ class MainWindow(QMainWindow):
             if hasattr(self, "grpSecond"):
                 self.grpSecond.setVisible(True)
             if hasattr(self, "paramsBox"):
+                # показываем группу, но оставляем свёрнутой по умолчанию
                 self.paramsBox.setVisible(True)
+                self.paramsBox.setChecked(False)
             if hasattr(self, "actionsPanel"):
                 self.actionsPanel.setVisible(True)
-            # при первом открытии сразу раскрыть параметры, дать рамку и прокрутить к ним
-            if hasattr(self, "paramsBox") and hasattr(self, "_optsWidget"):
-                if not self.paramsBox.isChecked():
-                    self.paramsBox.setChecked(True)
-                # Установим рамку при раскрытии
-                self.paramsBox.setStyleSheet("QGroupBox#paramsBox{border:1px solid palette(Mid);border-radius:8px;margin-top:8px;}")
-                if hasattr(self, "scrollArea"):
-                    self.scrollArea.ensureWidgetVisible(self._optsWidget)
         except Exception:
             pass
 
     def on_params_toggled(self, checked: bool):
         try:
-            if hasattr(self, "_optsWidget"):
-                self._optsWidget.setVisible(checked)
-            # Динамически меняем рамку группы
-            if hasattr(self, "paramsBox"):
-                if checked:
-                    self.paramsBox.setStyleSheet("QGroupBox#paramsBox{border:1px solid palette(Mid);border-radius:8px;margin-top:8px;}")
-                else:
-                    self.paramsBox.setStyleSheet("QGroupBox#paramsBox{border:none;}")
-            if checked and hasattr(self, "scrollArea") and hasattr(self, "_optsWidget"):
-                self.scrollArea.ensureWidgetVisible(self._optsWidget)
+            if hasattr(self, "_paramsFrame"):
+                self._paramsFrame.setVisible(checked)
+            if checked and hasattr(self, "scrollArea") and hasattr(self, "_paramsFrame"):
+                self.scrollArea.ensureWidgetVisible(self._paramsFrame)
         except Exception:
             pass
 
