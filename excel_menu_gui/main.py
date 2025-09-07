@@ -10,10 +10,10 @@ from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QBru
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QTextEdit, QComboBox, QLineEdit,
-    QGroupBox, QCheckBox, QSpinBox, QRadioButton, QButtonGroup, QMessageBox, QFrame,
+    QGroupBox, QCheckBox, QSpinBox, QRadioButton, QButtonGroup, QMessageBox, QFrame, QSizePolicy, QScrollArea,
 )
 
-from comparator import compare_and_highlight, get_sheet_names, auto_detect_dish_column, ColumnParseError
+from comparator import compare_and_highlight, get_sheet_names, ColumnParseError
 from template_linker import default_template_path
 from theme import ThemeMode, apply_theme, start_system_theme_watcher
 
@@ -89,6 +89,19 @@ def create_app_icon() -> QIcon:
     return QIcon(pix)
 
 
+def find_template(filename: str) -> Optional[str]:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    candidates = [
+        base / "excel_menu_gui" / "templates" / filename,
+        base / "templates" / filename,
+        Path(__file__).parent / "templates" / filename,
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    return None
+
+
 @dataclass
 class FileConfig:
     path: str = ""
@@ -124,11 +137,20 @@ class MainWindow(QMainWindow):
 
         self.btnDownloadTemplate = QPushButton("Скачать шаблон")
         self.btnDownloadTemplate.clicked.connect(self.do_download_template)
+        self.btnMakePresentation = QPushButton("Сделать презентацию")
+        self.btnMakePresentation.clicked.connect(self.do_make_presentation)
+        self.btnBrokerage = QPushButton("Брокеражный журнал")
+        self.btnBrokerage.clicked.connect(self.do_brokerage_journal)
+        self.btnShowCompare = QPushButton("Сравнить меню")
+        self.btnShowCompare.clicked.connect(self.show_compare_sections)
 
         layTop.addWidget(lblTheme)
         layTop.addWidget(self.cmbTheme)
         layTop.addStretch(1)
+        layTop.addWidget(self.btnShowCompare)
         layTop.addWidget(self.btnDownloadTemplate)
+        layTop.addWidget(self.btnMakePresentation)
+        layTop.addWidget(self.btnBrokerage)
 
         # Небольшое оформление панели управления через стили
         self.setStyleSheet(
@@ -140,24 +162,49 @@ class MainWindow(QMainWindow):
             }
             #topBar QPushButton {
                 padding: 6px 12px;
+                font-size: 14px;
+                font-weight: 600;
             }
             #topBar QComboBox {
-                padding: 2px 6px;
-                min-width: 140px;
+                padding: 4px 8px;
+                min-width: 160px;
+                font-size: 14px;
             }
             #topBar QLabel {
                 font-weight: 600;
             }
+            /* Параметры: рамка только при раскрытии */
+            #paramsBox {
+                border: 1px solid palette(Mid);
+                border-radius: 8px;
+                margin-top: 8px;
+            }
+            #paramsBox[checked=\"false\"] {
+                border: none;
+            }
             """
         )
 
-        root.addWidget(nice_group("Панель управления", topBar))
+        self.topGroup = nice_group("Панель управления", topBar)
+        self.topGroup.setObjectName("topGroup")
+        self.topGroup.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        root.addWidget(self.topGroup)
+
+        # Область прокрутки для остального содержимого, чтобы панель всегда была наверху
+        self.scrollArea = QScrollArea()
+        self.scrollArea.setWidgetResizable(True)
+        self.scrollArea.setFrameShape(QFrame.NoFrame)
+        self.contentContainer = QWidget()
+        self.contentLayout = QVBoxLayout(self.contentContainer)
+        self.contentLayout.setContentsMargins(0, 0, 0, 0)
+        self.contentLayout.setSpacing(10)
+        self.scrollArea.setWidget(self.contentContainer)
+        root.addWidget(self.scrollArea, 1)
 
         # File 1
         self.edPath1 = DropLineEdit()
         self.btnBrowse1 = QPushButton("Обзор…")
-        self.btnBrowse1.clicked.connect(lambda: self.browse_file(self.edPath1, self.cmbSheet1, which=1))
-        self.cmbSheet1 = QComboBox()
+        self.btnBrowse1.clicked.connect(lambda: self.browse_file(self.edPath1, which=1))
         self.edCol1 = QLineEdit("A")
         self.edCol1.setMaximumWidth(60)
         self.spinHdr1 = QSpinBox()
@@ -168,8 +215,6 @@ class MainWindow(QMainWindow):
         r1.addWidget(self.edPath1, 1)
         r1.addWidget(self.btnBrowse1)
         row1b = QWidget(); r1b = QHBoxLayout(row1b)
-        r1b.addWidget(label_caption("Лист:"))
-        r1b.addWidget(self.cmbSheet1)
         r1b.addWidget(label_caption("Колонка блюд:"))
         r1b.addWidget(self.edCol1)
         r1b.addWidget(label_caption("Строка заголовка:"))
@@ -179,13 +224,14 @@ class MainWindow(QMainWindow):
         l1.addWidget(label_caption("Файл 1"))
         l1.addWidget(row1)
         l1.addWidget(row1b)
-        root.addWidget(nice_group("Первый файл", g1))
+        self.grpFirst = nice_group("Первый файл", g1)
+        self.contentLayout.addWidget(self.grpFirst)
+        self.grpFirst.setVisible(False)
 
         # File 2
         self.edPath2 = DropLineEdit()
         self.btnBrowse2 = QPushButton("Обзор…")
-        self.btnBrowse2.clicked.connect(lambda: self.browse_file(self.edPath2, self.cmbSheet2, which=2))
-        self.cmbSheet2 = QComboBox()
+        self.btnBrowse2.clicked.connect(lambda: self.browse_file(self.edPath2, which=2))
         self.edCol2 = QLineEdit("A")
         self.edCol2.setMaximumWidth(60)
         self.spinHdr2 = QSpinBox(); self.spinHdr2.setRange(1, 10000); self.spinHdr2.setValue(1)
@@ -194,8 +240,6 @@ class MainWindow(QMainWindow):
         r2.addWidget(self.edPath2, 1)
         r2.addWidget(self.btnBrowse2)
         row2b = QWidget(); r2b = QHBoxLayout(row2b)
-        r2b.addWidget(label_caption("Лист:"))
-        r2b.addWidget(self.cmbSheet2)
         r2b.addWidget(label_caption("Колонка блюд:"))
         r2b.addWidget(self.edCol2)
         r2b.addWidget(label_caption("Строка заголовка:"))
@@ -205,9 +249,11 @@ class MainWindow(QMainWindow):
         l2.addWidget(label_caption("Файл 2"))
         l2.addWidget(row2)
         l2.addWidget(row2b)
-        root.addWidget(nice_group("Второй файл", g2))
+        self.grpSecond = nice_group("Второй файл", g2)
+        self.contentLayout.addWidget(self.grpSecond)
+        self.grpSecond.setVisible(False)
 
-        # Options
+        # Параметры (дополнительно) — сворачиваемая группа
         opts = QWidget(); lo = QHBoxLayout(opts)
         self.chkIgnoreCase = QCheckBox("Игнорировать регистр")
         self.chkIgnoreCase.setChecked(True)
@@ -227,20 +273,28 @@ class MainWindow(QMainWindow):
         lo.addWidget(self.spinFuzzy)
         lo.addStretch(1)
         lo.addWidget(self.rbAuto)
-        root.addWidget(nice_group("Параметры", opts))
 
-        # Действия
-        actions = QWidget(); la = QHBoxLayout(actions)
+        self.paramsBox = QGroupBox("Параметры (дополнительно)")
+        self.paramsBox.setObjectName("paramsBox")
+        self.paramsBox.setCheckable(True)
+        self.paramsBox.setChecked(False)
+        lparams = QVBoxLayout(self.paramsBox)
+        lparams.addWidget(opts)
+        opts.setVisible(False)
+        self.paramsBox.toggled.connect(opts.setVisible)
+        self.contentLayout.addWidget(self.paramsBox)
+        self.paramsBox.setVisible(False)
+
+        # Действия (показываются после нажатия "Сравнить меню")
+        self.actionsPanel = QWidget(); la = QHBoxLayout(self.actionsPanel)
         self.btnCompare = QPushButton("Сравнить и подсветить")
         self.btnCompare.clicked.connect(self.do_compare)
 
         la.addStretch(1)
         la.addWidget(self.btnCompare)
-        root.addWidget(actions)
+        self.contentLayout.addWidget(self.actionsPanel)
+        self.actionsPanel.setVisible(False)
 
-        # Log
-        self.txtLog = QTextEdit(); self.txtLog.setReadOnly(True)
-        root.addWidget(nice_group("Лог", self.txtLog), 1)
 
         # Theming (follow system by default)
         self._theme_mode = ThemeMode.SYSTEM
@@ -249,7 +303,8 @@ class MainWindow(QMainWindow):
         self._theme_timer = start_system_theme_watcher(lambda light: self._on_system_theme_change(light))
 
     def log(self, msg: str):
-        self.txtLog.append(msg)
+        # Лог отключён по запросу — ничего не делаем
+        pass
 
     def on_theme_changed(self, idx: int):
         if idx == 0:
@@ -273,54 +328,36 @@ class MainWindow(QMainWindow):
             pass
         super().closeEvent(event)
 
-    def browse_file(self, target: QLineEdit, cmb: QComboBox, which: int):
+    def browse_file(self, target: QLineEdit, which: int):
         path, _ = QFileDialog.getOpenFileName(self, "Выберите файл", str(Path.cwd()), "Excel (*.xls *.xlsx *.xlsm);;Все файлы (*.*)")
         if path:
             target.setText(path)
-            self.fill_sheets(target.text(), cmb)
 
-    def fill_sheets(self, path: str, cmb: QComboBox):
+    def select_default_sheet(self, path: str) -> Optional[str]:
         try:
-            cmb.clear()
             names = get_sheet_names(path)
-            cmb.addItems(names)
-            # авто-выбор листа с "касс"
-            for i, nm in enumerate(names):
+            if not names:
+                return None
+            for nm in names:
                 low = nm.strip().lower()
                 if "касс" in low or "kass" in low:
-                    cmb.setCurrentIndex(i)
-                    break
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось прочитать листы: {e}")
+                    return nm
+            return names[0]
+        except Exception:
+            return None
 
-    def do_autodetect(self, which: int):
-        try:
-            if which == 1:
-                path = self.edPath1.text().strip()
-                sheet = self.cmbSheet1.currentText()
-            else:
-                path = self.edPath2.text().strip()
-                sheet = self.cmbSheet2.currentText()
-            if not path or not sheet:
-                QMessageBox.warning(self, "Внимание", "Укажите файл и лист.")
-                return
-            col, hdr = auto_detect_dish_column(path, sheet)
-            if which == 1:
-                self.edCol1.setText(col)
-                self.spinHdr1.setValue(hdr)
-            else:
-                self.edCol2.setText(col)
-                self.spinHdr2.setValue(hdr)
-            self.log(f"Автоопределение ({which}): колонка {col}, строка заголовка {hdr}")
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", str(e))
 
     def do_compare(self):
         try:
-            p1 = self.edPath1.text().strip(); s1 = self.cmbSheet1.currentText()
-            p2 = self.edPath2.text().strip(); s2 = self.cmbSheet2.currentText()
-            if not (p1 and p2 and s1 and s2):
-                QMessageBox.warning(self, "Внимание", "Укажите оба файла и выберите листы.")
+            p1 = self.edPath1.text().strip()
+            p2 = self.edPath2.text().strip()
+            s1 = self.select_default_sheet(p1) if p1 else None
+            s2 = self.select_default_sheet(p2) if p2 else None
+            if not (p1 and p2):
+                QMessageBox.warning(self, "Внимание", "Укажите оба файла.")
+                return
+            if not (s1 and s2):
+                QMessageBox.warning(self, "Листы", "Не удалось определить листы для сравнения.")
                 return
             try:
                 # Всегда авто по дате
@@ -343,6 +380,20 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
+    def show_compare_sections(self):
+        try:
+            # Показать формы сравнения и панель действий
+            if hasattr(self, "grpFirst"):
+                self.grpFirst.setVisible(True)
+            if hasattr(self, "grpSecond"):
+                self.grpSecond.setVisible(True)
+            if hasattr(self, "paramsBox"):
+                self.paramsBox.setVisible(True)
+            if hasattr(self, "actionsPanel"):
+                self.actionsPanel.setVisible(True)
+        except Exception:
+            pass
+
     def do_download_template(self):
         try:
             tpl = default_template_path()
@@ -356,6 +407,36 @@ class MainWindow(QMainWindow):
             shutil.copy2(tpl, out_path)
             self.log(f"Шаблон сохранён: {out_path}")
             QMessageBox.information(self, "Готово", f"Шаблон сохранён:\n{out_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def do_make_presentation(self):
+        try:
+            tpl = find_template("presentation_template.pptx")
+            if not tpl:
+                QMessageBox.information(self, "Презентация", "Шаблон презентации не найден. Положите файл presentation_template.pptx в папку templates.")
+                return
+            suggested = str(Path.home() / "презентация.pptx")
+            out_path, _ = QFileDialog.getSaveFileName(self, "Сохранить презентацию", suggested, "PowerPoint (*.pptx)")
+            if not out_path:
+                return
+            shutil.copy2(tpl, out_path)
+            QMessageBox.information(self, "Готово", f"Презентация сохранена:\n{out_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def do_brokerage_journal(self):
+        try:
+            tpl = find_template("brokerage_journal_template.xlsx")
+            if not tpl:
+                QMessageBox.information(self, "Брокеражный журнал", "Шаблон брокеражного журнала не найден. Положите файл brokerage_journal_template.xlsx в папку templates.")
+                return
+            suggested = str(Path.home() / "брокеражный_журнал.xlsx")
+            out_path, _ = QFileDialog.getSaveFileName(self, "Сохранить брокеражный журнал", suggested, "Excel (*.xlsx)")
+            if not out_path:
+                return
+            shutil.copy2(tpl, out_path)
+            QMessageBox.information(self, "Готово", f"Брокеражный журнал сохранён:\n{out_path}")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
