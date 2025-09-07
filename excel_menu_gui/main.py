@@ -10,11 +10,11 @@ from PySide6.QtGui import QPalette, QColor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QTextEdit, QComboBox, QLineEdit,
-    QGroupBox, QCheckBox, QSpinBox, QRadioButton, QButtonGroup, QMessageBox,
+    QGroupBox, QCheckBox, QSpinBox, QRadioButton, QButtonGroup, QMessageBox, QFrame,
 )
 
 from comparator import compare_and_highlight, get_sheet_names, auto_detect_dish_column, ColumnParseError
-from template_linker import link_template_categories, default_template_path
+from template_linker import default_template_path
 from theme import ThemeMode, apply_theme, start_system_theme_watcher
 
 
@@ -75,19 +75,48 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(10)
 
-        # Appearance / Theme
-        appearance = QWidget(); layA = QHBoxLayout(appearance)
-        layA.addWidget(label_caption("Тема:"))
+        # Панель управления (сверху)
+        topBar = QFrame(); topBar.setObjectName("topBar")
+        layTop = QHBoxLayout(topBar)
+        layTop.setContentsMargins(12, 8, 12, 8)
+        layTop.setSpacing(10)
+
+        lblTheme = QLabel("Тема:")
         self.cmbTheme = QComboBox()
         self.cmbTheme.addItems(["Системная", "Светлая", "Тёмная"])
         self.cmbTheme.setCurrentIndex(0)
         self.cmbTheme.currentIndexChanged.connect(self.on_theme_changed)
-        layA.addWidget(self.cmbTheme)
+
         self.btnDownloadTemplate = QPushButton("Скачать шаблон")
         self.btnDownloadTemplate.clicked.connect(self.do_download_template)
-        layA.addWidget(self.btnDownloadTemplate)
-        layA.addStretch(1)
-        root.addWidget(nice_group("Вид", appearance))
+
+        layTop.addWidget(lblTheme)
+        layTop.addWidget(self.cmbTheme)
+        layTop.addStretch(1)
+        layTop.addWidget(self.btnDownloadTemplate)
+
+        # Небольшое оформление панели управления через стили
+        self.setStyleSheet(
+            """
+            #topBar {
+                border: 1px solid palette(Mid);
+                border-radius: 8px;
+                background: palette(Base);
+            }
+            #topBar QPushButton {
+                padding: 6px 12px;
+            }
+            #topBar QComboBox {
+                padding: 2px 6px;
+                min-width: 140px;
+            }
+            #topBar QLabel {
+                font-weight: 600;
+            }
+            """
+        )
+
+        root.addWidget(topBar)
 
         # File 1
         self.edPath1 = DropLineEdit()
@@ -165,18 +194,11 @@ class MainWindow(QMainWindow):
         lo.addWidget(self.rbAuto)
         root.addWidget(nice_group("Параметры", opts))
 
-        # Actions
+        # Действия
         actions = QWidget(); la = QHBoxLayout(actions)
-        self.btnAutoDetect1 = QPushButton("Автоопределить (файл 1)")
-        self.btnAutoDetect2 = QPushButton("Автоопределить (файл 2)")
         self.btnCompare = QPushButton("Сравнить и подсветить")
-
-        self.btnAutoDetect1.clicked.connect(lambda: self.do_autodetect(which=1))
-        self.btnAutoDetect2.clicked.connect(lambda: self.do_autodetect(which=2))
         self.btnCompare.clicked.connect(self.do_compare)
 
-        la.addWidget(self.btnAutoDetect1)
-        la.addWidget(self.btnAutoDetect2)
         la.addStretch(1)
         la.addWidget(self.btnCompare)
         root.addWidget(actions)
