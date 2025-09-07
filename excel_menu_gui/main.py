@@ -253,8 +253,9 @@ class MainWindow(QMainWindow):
         self.contentContainer = QWidget()
         self.contentLayout = QVBoxLayout(self.contentContainer)
         self.contentLayout.setContentsMargins(0, 0, 0, 0)
-        self.contentLayout.setSpacing(0)
+        self.contentLayout.setSpacing(8)  # фиксированный вертикальный интервал между компонентами
         self.scrollArea.setWidget(self.contentContainer)
+        self.scrollArea.setAlignment(Qt.AlignTop)  # прижимаем контент к верху, если он ниже области
         root.addWidget(self.scrollArea, 1)
 
         # Excel файл для презентации (используем тот же стиль, что и для файлов сравнения)
@@ -377,6 +378,8 @@ class MainWindow(QMainWindow):
         self.contentLayout.addWidget(self.paramsBox)
         self.paramsBox.setVisible(False)
 
+        # Добавляем нижний растягивающий элемент, чтобы контент не растягивался равномерно, а был прижат кверху
+        self.contentLayout.addStretch(1)
 
         # Theming (System alias Dark by default)
         self._theme_mode = ThemeMode.DARK  # «Системная» ведёт себя как «Тёмная»
