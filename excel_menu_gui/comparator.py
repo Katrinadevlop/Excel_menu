@@ -372,7 +372,7 @@ def compare_and_highlight(
     d1 = _extract_best_date_from_file(path1, sheet1)
     d2 = _extract_best_date_from_file(path2, sheet2)
     
-    # Определяем последнюю дату для использования в названии файла
+    # Определяем самую позднюю дату из двух файлов для использования в выходном файле
     latest_date = None
     if d1 and d2:
         latest_date = max(d1, d2)
@@ -381,6 +381,9 @@ def compare_and_highlight(
     elif d2:
         latest_date = d2
     
+    # ВАЖНО: Независимо от выбора final_choice, ВСЕГДА используем самую позднюю дату
+    # для названия выходного файла, даже если финальным выбран файл с более ранней датой
+    
     if final_choice == 1:
         final_path, final_sheet = path1, sheet1
         ref_path, ref_sheet = path2, sheet2
@@ -388,6 +391,7 @@ def compare_and_highlight(
         final_path, final_sheet = path2, sheet2
         ref_path, ref_sheet = path1, sheet1
     else:
+        # Автовыбор: берем файл с более поздней датой как финальный
         if d1 and d2:
             if d2 >= d1:
                 final_path, final_sheet = path2, sheet2
@@ -402,6 +406,7 @@ def compare_and_highlight(
             final_path, final_sheet = path2, sheet2
             ref_path, ref_sheet = path1, sheet1
         else:
+            # Если дат нет ни в одном файле, берем второй файл по умолчанию
             final_path, final_sheet = path2, sheet2
             ref_path, ref_sheet = path1, sheet1
 
