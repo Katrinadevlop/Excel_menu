@@ -472,10 +472,7 @@ def compare_and_highlight(
             if text and is_match_fallback(text):
                 cell.font = red_font
                 matches += 1
-        # Добавляем информацию о дате в файл
-        if latest_date:
-            _add_date_info_to_worksheet(sh, latest_date)
-        
+        # Дата используется только в названии файла, не добавляем её в содержимое
         out_path = make_final_output_path(final_xlsx, latest_date)
         wb.save(out_path)
         wb.close()
@@ -525,10 +522,7 @@ def compare_and_highlight(
                 cell.font = red_font
                 matches += 1
 
-    # Добавляем информацию о дате в файл
-    if latest_date:
-        _add_date_info_to_worksheet(sh, latest_date)
-    
+    # Дата используется только в названии файла, не добавляем её в содержимое
     out_path = make_final_output_path(final_xlsx, latest_date)
     wb.save(out_path)
     wb.close()
