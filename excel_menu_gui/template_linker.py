@@ -18,6 +18,10 @@ def default_template_path() -> str:
     # Support PyInstaller onefile (sys._MEIPASS) and dev mode
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
     candidates = [
+        base / "excel_menu_gui" / "templates" / "Шаблон меню пример.xlsx",
+        base / "templates" / "Шаблон меню пример.xlsx",
+        Path(__file__).parent / "templates" / "Шаблон меню пример.xlsx",
+        # Оставляем старые пути для совместимости
         base / "excel_menu_gui" / "templates" / "menu_template.xls",
         base / "templates" / "menu_template.xls",
         Path(__file__).parent / "templates" / "menu_template.xls",
@@ -25,7 +29,7 @@ def default_template_path() -> str:
     for p in candidates:
         if p.exists():
             return str(p)
-    return str(Path(__file__).parent / "templates" / "menu_template.xls")
+    return str(Path(__file__).parent / "templates" / "Шаблон меню пример.xlsx")
 
 
 def find_headers(ws) -> dict:

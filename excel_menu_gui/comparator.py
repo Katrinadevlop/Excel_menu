@@ -368,7 +368,19 @@ def compare_and_highlight(
     При отсутствии маркеров — используем прежнюю логику с одиночной колонкой.
     Возвращает (out_path, matches).
     """
-    # determine final/ref based on choice
+    # determine final/ref based on choice and extract dates
+    d1 = _extract_best_date_from_file(path1, sheet1)
+    d2 = _extract_best_date_from_file(path2, sheet2)
+    
+    # Определяем последнюю дату для использования в названии файла
+    latest_date = None
+    if d1 and d2:
+        latest_date = max(d1, d2)
+    elif d1:
+        latest_date = d1
+    elif d2:
+        latest_date = d2
+    
     if final_choice == 1:
         final_path, final_sheet = path1, sheet1
         ref_path, ref_sheet = path2, sheet2
@@ -376,8 +388,6 @@ def compare_and_highlight(
         final_path, final_sheet = path2, sheet2
         ref_path, ref_sheet = path1, sheet1
     else:
-        d1 = _extract_best_date_from_file(path1, sheet1)
-        d2 = _extract_best_date_from_file(path2, sheet2)
         if d1 and d2:
             if d2 >= d1:
                 final_path, final_sheet = path2, sheet2
@@ -457,7 +467,11 @@ def compare_and_highlight(
             if text and is_match_fallback(text):
                 cell.font = red_font
                 matches += 1
-        out_path = make_final_output_path(final_xlsx)
+        # Добавляем информацию о дате в файл
+        if latest_date:
+            _add_date_info_to_worksheet(sh, latest_date)
+        
+        out_path = make_final_output_path(final_xlsx, latest_date)
         wb.save(out_path)
         wb.close()
         return out_path, matches
@@ -506,15 +520,46 @@ def compare_and_highlight(
                 cell.font = red_font
                 matches += 1
 
-    out_path = make_final_output_path(final_xlsx)
+    # Добавляем информацию о дате в файл
+    if latest_date:
+        _add_date_info_to_worksheet(sh, latest_date)
+    
+    out_path = make_final_output_path(final_xlsx, latest_date)
     wb.save(out_path)
     wb.close()
     return out_path, matches
 
 
-def make_final_output_path(original_path: str) -> str:
+def make_final_output_path(original_path: str, latest_date: Optional[date] = None) -> str:
     p = Path(original_path)
-    return str(p.with_name(p.stem + "_final" + p.suffix))
+    if latest_date:
+        date_str = latest_date.strftime("%d.%m.%Y")
+        return str(p.with_name(p.stem + f"_сравнение_{date_str}" + p.suffix))
+    else:
+        return str(p.with_name(p.stem + "_сравнение" + p.suffix))
+
+
+def _add_date_info_to_worksheet(worksheet, latest_date: date) -> None:
+    """Добавляет информацию о дате сравнения в верхнюю часть листа."""
+    try:
+        from openpyxl.styles import Font, Alignment
+        
+        # Сдвигаем содержимое вниз на одну строку
+        worksheet.insert_rows(1)
+        
+        # Добавляем информацию о дате в первую строку
+        date_str = latest_date.strftime("%d.%m.%Y")
+        cell = worksheet.cell(row=1, column=1)
+        cell.value = f"Результат сравнения меню на {date_str}"
+        cell.font = Font(bold=True, size=14)
+        cell.alignment = Alignment(horizontal='left')
+        
+        # Объединяем ячейки для красивого отображения
+        worksheet.merge_cells('A1:E1')
+        
+    except Exception:
+        # Если что-то пошло не так, просто игнорируем добавление даты
+        pass
 
 
 def auto_header_row_by_markers(path: str, sheet_name: str) -> int:

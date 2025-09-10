@@ -160,7 +160,7 @@ class MainWindow(QMainWindow):
         self.cmbTheme.setCurrentIndex(0)
         self.cmbTheme.currentIndexChanged.connect(self.on_theme_changed)
 
-        self.btnDownloadTemplate = QPushButton("Сделать шаблон")
+        self.btnDownloadTemplate = QPushButton("Скачать шаблон меню")
         self.btnDownloadTemplate.clicked.connect(self.do_download_template)
         self.btnMakePresentation = QPushButton("Сделать презентацию")
         self.btnMakePresentation.clicked.connect(self.do_make_presentation)
@@ -260,7 +260,7 @@ class MainWindow(QMainWindow):
 
         # Excel файл для презентации (используем тот же стиль, что и для файлов сравнения)
         self.edExcelPath = DropLineEdit()
-        self.edExcelPath.setPlaceholderText("Выберите Excel файл с меню для презентации...")
+        self.edExcelPath.setPlaceholderText("Выберите Excel файл с меню (салаты, первые блюда, мясо, птица, рыба, гарниры)...")
         self.btnBrowseExcel = QPushButton("Обзор…")
         self.btnBrowseExcel.clicked.connect(lambda: self.browse_excel_file())
 
@@ -269,10 +269,10 @@ class MainWindow(QMainWindow):
         excel_layout.addWidget(self.btnBrowseExcel)
 
         excel_group = QWidget(); excel_group_layout = QVBoxLayout(excel_group)
-        excel_group_layout.addWidget(label_caption("Excel файл с меню"))
+        excel_group_layout.addWidget(label_caption("Excel файл с меню (все категории)"))
         excel_group_layout.addWidget(excel_row)
         
-        self.grpExcelFile = FileDropGroup("Файл меню для презентации", self.edExcelPath, excel_group)
+        self.grpExcelFile = FileDropGroup("Файл меню для презентации (6 категорий)", self.edExcelPath, excel_group)
         # Делаем такую же компактную высоту и отступы, как у панелей сравнения
         self.grpExcelFile.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.grpExcelFile.setMinimumHeight(95)
@@ -294,7 +294,7 @@ class MainWindow(QMainWindow):
         self.presentationActionsPanel = QWidget(); self.presentationActionsPanel.setObjectName("actionsPanel")
         pla = QHBoxLayout(self.presentationActionsPanel)
         pla.setContentsMargins(0, 8, 0, 0)  # небольшой отступ сверху
-        self.btnCreatePresentationWithData = QPushButton("Скачать презентацию с данными")
+        self.btnCreatePresentationWithData = QPushButton("Скачать презентацию с меню")
         self.btnCreatePresentationWithData.clicked.connect(self.do_create_presentation_with_data)
         pla.addStretch(1)
         pla.addWidget(self.btnCreatePresentationWithData)
@@ -439,9 +439,28 @@ class MainWindow(QMainWindow):
             if not (s1 and s2):
                 QMessageBox.warning(self, "Листы", "Не удалось определить листы для сравнения.")
                 return
+            
+            # Выбираем место сохранения результата сравнения
+            # Получаем текущую дату для названия по умолчанию
+            from datetime import date
+            today_str = date.today().strftime("%d.%m.%Y")
+            suggested_name = f"сравнение_меню_{today_str}.xlsx"
+            desktop = Path.home() / "Desktop"
+            suggested_path = str(desktop / suggested_name)
+            
+            save_path, _ = QFileDialog.getSaveFileName(
+                self, 
+                "Сохранить результат сравнения", 
+                suggested_path, 
+                "Excel (*.xlsx);;Excel (*.xls);;Все файлы (*.*)"
+            )
+            
+            if not save_path:
+                return  # Пользователь отменил сохранение
+            
             try:
                 # Всегда авто по дате
-                out_path, matches = compare_and_highlight(
+                temp_out_path, matches = compare_and_highlight(
                     path1=p1, sheet1=s1,
                     path2=p2, sheet2=s2,
                     col1="A",
@@ -453,8 +472,14 @@ class MainWindow(QMainWindow):
                     fuzzy_threshold=int(self.spinFuzzy.value()),
                     final_choice=2,
                 )
-                self.log(f"Готово. Совпадений: {matches}. Итоговый файл: {out_path}")
-                QMessageBox.information(self, "Готово", f"Совпадений: {matches}\nИтоговый файл: {out_path}")
+                
+                # Перемещаем файл в выбранное место
+                if temp_out_path != save_path:
+                    import shutil
+                    shutil.move(temp_out_path, save_path)
+                
+                self.log(f"Готово. Совпадений: {matches}. Итоговый файл: {save_path}")
+                QMessageBox.information(self, "Готово", f"Совпадений: {matches}\nФайл сохранён: {save_path}")
             except ColumnParseError as e:
                 QMessageBox.warning(self, "Колонка", str(e))
         except Exception as e:
@@ -495,15 +520,35 @@ class MainWindow(QMainWindow):
         try:
             tpl = default_template_path()
             if not Path(tpl).exists():
-                QMessageBox.warning(self, "Шаблон", f"Шаблон не найден: {tpl}\nСначала положите файл в templates/menu_template.xls")
+                QMessageBox.warning(self, "Шаблон", f"Шаблон не найден: {tpl}\nСначала положите файл в папку templates/")
                 return
-            suggested = str(Path.home() / "menu_template.xls")
-            out_path, _ = QFileDialog.getSaveFileName(self, "Сохранить шаблон", suggested, "Excel (*.xls)")
-            if not out_path:
-                return
-            shutil.copy2(tpl, out_path)
-            self.log(f"Шаблон сохранён: {out_path}")
-            QMessageBox.information(self, "Готово", f"Шаблон сохранён:\n{out_path}")
+            
+            # Определяем расширение исходного файла
+            tpl_path = Path(tpl)
+            ext = tpl_path.suffix
+            
+            # Выбираем место сохранения шаблона
+            desktop = Path.home() / "Desktop"
+            if ext.lower() == '.xlsx':
+                suggested_name = "Шаблон_меню.xlsx"
+            else:
+                suggested_name = "menu_template.xls"
+            
+            suggested_path = str(desktop / suggested_name)
+            
+            save_path, _ = QFileDialog.getSaveFileName(
+                self, 
+                "Сохранить шаблон меню", 
+                suggested_path, 
+                "Excel (*.xlsx);;Excel (*.xls);;Все файлы (*.*)"
+            )
+            
+            if not save_path:
+                return  # Пользователь отменил сохранение
+            
+            shutil.copy2(tpl, save_path)
+            self.log(f"Шаблон скачан: {save_path}")
+            QMessageBox.information(self, "Готово", f"Шаблон меню сохранён:\n{Path(save_path).name}")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
@@ -560,26 +605,30 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Шаблон", "Шаблон презентации не найден. Положите файл presentation_template.pptx в папку templates.")
                 return
             
-            # Выбираем путь для сохранения итоговой презентации
-            suggested = str(Path.home() / "презентация_с_меню.pptx")
-            out_path, _ = QFileDialog.getSaveFileName(
+            # Выбираем место сохранения презентации
+            suggested_name = "меню_полное.pptx"
+            desktop = Path.home() / "Desktop"
+            suggested_path = str(desktop / suggested_name)
+            
+            save_path, _ = QFileDialog.getSaveFileName(
                 self, 
                 "Сохранить презентацию с меню", 
-                suggested, 
-                "PowerPoint (*.pptx)"
+                suggested_path, 
+                "PowerPoint (*.pptx);;PowerPoint (*.ppt);;Все файлы (*.*)"
             )
-            if not out_path:
-                return
+            
+            if not save_path:
+                return  # Пользователь отменил сохранение
                 
             # Создаем презентацию с данными
             success, message = create_presentation_with_excel_data(
                 template_path, 
                 excel_path, 
-                out_path
+                save_path
             )
             
             if success:
-                QMessageBox.information(self, "Готово", f"Презентация создана успешно!\n{message}\nФайл: {out_path}")
+                QMessageBox.information(self, "Готово", f"Презентация со всеми категориями создана!\n{message}\nФайл: {Path(save_path).name}")
             else:
                 QMessageBox.warning(self, "Ошибка", f"Не удалось создать презентацию:\n{message}")
                 
@@ -592,12 +641,24 @@ class MainWindow(QMainWindow):
             if not tpl:
                 QMessageBox.information(self, "Брокеражный журнал", "Шаблон брокеражного журнала не найден. Положите файл brokerage_journal_template.xlsx в папку templates.")
                 return
-            suggested = str(Path.home() / "брокеражный_журнал.xlsx")
-            out_path, _ = QFileDialog.getSaveFileName(self, "Сохранить брокеражный журнал", suggested, "Excel (*.xlsx)")
-            if not out_path:
-                return
-            shutil.copy2(tpl, out_path)
-            QMessageBox.information(self, "Готово", f"Брокеражный журнал сохранён:\n{out_path}")
+            
+            # Выбираем место сохранения брокеражного журнала
+            suggested_name = "брокеражный_журнал.xlsx"
+            desktop = Path.home() / "Desktop"
+            suggested_path = str(desktop / suggested_name)
+            
+            save_path, _ = QFileDialog.getSaveFileName(
+                self, 
+                "Сохранить брокеражный журнал", 
+                suggested_path, 
+                "Excel (*.xlsx);;Excel (*.xls);;Все файлы (*.*)"
+            )
+            
+            if not save_path:
+                return  # Пользователь отменил сохранение
+            
+            shutil.copy2(tpl, save_path)
+            QMessageBox.information(self, "Готово", f"Брокеражный журнал сохранён:\n{Path(save_path).name}")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
