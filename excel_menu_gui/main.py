@@ -441,10 +441,32 @@ class MainWindow(QMainWindow):
                 return
             
             # Выбираем место сохранения результата сравнения
-            # Получаем текущую дату для названия по умолчанию
+            # Получаем дату из Excel файлов для правильного названия
+            from comparator import _extract_best_date_from_file
             from datetime import date
-            today_str = date.today().strftime("%d.%m.%Y")
-            suggested_name = f"сравнение_меню_{today_str}.xlsx"
+            
+            # Извлекаем даты из обоих файлов
+            d1 = _extract_best_date_from_file(p1, s1)
+            d2 = _extract_best_date_from_file(p2, s2)
+            
+            # Определяем самую позднюю дату для названия файла
+            latest_date = None
+            if d1 and d2:
+                latest_date = max(d1, d2)
+            elif d1:
+                latest_date = d1
+            elif d2:
+                latest_date = d2
+            
+            # Формируем предлагаемое имя с правильной датой
+            if latest_date:
+                date_str = latest_date.strftime("%d.%m.%Y")
+                suggested_name = f"сравнение_меню_{date_str}.xlsx"
+            else:
+                # Если даты не найдены, используем текущую дату как fallback
+                today_str = date.today().strftime("%d.%m.%Y")
+                suggested_name = f"сравнение_меню_{today_str}.xlsx"
+            
             desktop = Path.home() / "Desktop"
             suggested_path = str(desktop / suggested_name)
             
