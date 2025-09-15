@@ -685,20 +685,159 @@ def extract_first_courses_from_excel(excel_path: str) -> List[MenuItem]:
     return soups
 
 
-def extract_meat_dishes_from_excel(excel_path: str) -> List[MenuItem]:
-    """Извлекает блюда из мяса, исключая первые блюда."""
-    # Сначала пробуем найти точную секцию "БЛЮДА ИЗ МЯСА" с остановкой на следующих категориях
+def extract_meat_dishes_by_range(excel_path: str) -> List[MenuItem]:
+    """Извлекает блюда из мяса из точного диапазона от 'БЛЮДА ИЗ МЯСА' до 'БЛЮДА ИЗ ПТИЦЫ'."""
     try:
-        # Пробуем найти с остановкой на следующих категориях
-        stop_keywords = ['БЛЮДА ИЗ ПТИЦЫ', 'РЫБНЫЕ БЛЮДА', 'БЛЮДА ИЗ РЫБЫ', 'ГАРНИРЫ', 'НАПИТКИ']
-        keywords = ['БЛЮДА ИЗ МЯСА', 'МЯСНЫЕ БЛЮДА']
+        # Выбираем лист (приоритет листу с "касс")
+        xls = pd.ExcelFile(excel_path)
+        sheet_name = None
+        for nm in xls.sheet_names:
+            if 'касс' in str(nm).strip().lower():
+                sheet_name = nm
+                break
+        if sheet_name is None and xls.sheet_names:
+            sheet_name = xls.sheet_names[0]
+
+        # Читаем весь лист
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+        
+        def row_text(row) -> str:
+            parts = []
+            for v in row:
+                if pd.notna(v):
+                    parts.append(str(v))
+            return ' '.join(parts).strip()
+        
+        # Находим строку с заголовком "БЛЮДА ИЗ МЯСА"
+        start_row = None
+        end_row = None
+        
+        for i in range(len(df)):
+            row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+            
+            # Ищем начало секции мясных блюд
+            if start_row is None:
+                if 'БЛЮДА ИЗ МЯСА' in row_content or 'МЯСНЫЕ БЛЮДА' in row_content:
+                    start_row = i
+                    print(f"Найден заголовок мясных блюд в строке {i + 1}: {row_content}")
+                    continue
+            
+            # Ищем конец секции (БЛЮДА ИЗ ПТИЦЫ)
+            if start_row is not None and end_row is None:
+                if 'БЛЮДА ИЗ ПТИЦЫ' in row_content or ('ПТИЦ' in row_content and 'БЛЮДА' in row_content):
+                    end_row = i
+                    print(f"Найден заголовок блюд из птицы в строке {i + 1}: {row_content}")
+                    break
+        
+        if start_row is None:
+            print("Заголовок 'БЛЮДА ИЗ МЯСА' не найден")
+            return []
+        
+        if end_row is None:
+            # Если не найдены блюда из птицы, ищем другие стоп-категории
+            end_row = len(df)
+            for i in range(start_row + 1, len(df)):
+                row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+                # Ищем другие категории как стоп-слова
+                if any(category in row_content for category in [
+                    'РЫБНЫЕ БЛЮДА', 'БЛЮДА ИЗ РЫБЫ', 'ГАРНИРЫ', 'НАПИТКИ', 
+                    'ДЕСЕРТЫ', 'САЛАТЫ', 'СЭНДВИЧ'
+                ]):
+                    end_row = i
+                    break
+        
+        print(f"Обрабатываем мясные блюда от строки {start_row + 1} до строки {end_row}")
+        
+        # Извлекаем блюда из найденного диапазона
+        dishes: List[MenuItem] = []
+        
+        for i in range(start_row + 1, end_row):
+            if i >= len(df):
+                break
+                
+            row = df.iloc[i]
+            row_content = row_text(row)
+            
+            # Пропускаем пустые строки
+            if not row_content.strip():
+                continue
+                
+            # Пропускаем строки, которые выглядят как подзаголовки (все заглавные)
+            if row_content.isupper() and len(row_content) > 10:
+                continue
+                
+            # Ищем название блюда в первой непустой ячейке
+            dish_name = ""
+            dish_weight = ""
+            dish_price = ""
+            
+            # Проходим по всем ячейкам строки
+            for j, cell_value in enumerate(row):
+                if pd.notna(cell_value):
+                    cell_text = str(cell_value).strip()
+                    if not cell_text:
+                        continue
+                    
+                    # Первая значимая ячейка - это название блюда
+                    if not dish_name and not cell_text.isupper() and len(cell_text) > 3:
+                        # Проверяем, что это не цена и не вес
+                        if not re.match(r'^\d+([.,]\d+)?\s*(руб|₽|р\.?)?$', cell_text) and \
+                           not re.search(r'\d+\s*(г|гр|мл|л|шт)', cell_text, re.IGNORECASE):
+                            dish_name = cell_text
+                            continue
+                    
+                    # Ищем вес (содержит единицы измерения)
+                    if not dish_weight and re.search(r'\d+.*?(г|гр|грамм|мл|л|кг|шт)', cell_text, re.IGNORECASE):
+                        dish_weight = cell_text
+                        continue
+                    
+                    # Ищем цену (число, возможно с "руб" или символом рубля)
+                    if not dish_price and re.search(r'\d+', cell_text):
+                        # Проверяем, что это не вес
+                        if not re.search(r'г|гр|грамм|мл|л|кг|шт', cell_text, re.IGNORECASE):
+                            if cell_text.replace('.', '').replace(',', '').isdigit():
+                                dish_price = f"{cell_text} руб."
+                            elif re.search(r'\d+.*?(руб|₽|р\.?)', cell_text, re.IGNORECASE):
+                                dish_price = cell_text
+                            else:
+                                # Просто число - добавляем "руб."
+                                number_match = re.search(r'\d+([.,]\d+)?', cell_text)
+                                if number_match:
+                                    dish_price = f"{number_match.group()} руб."
+            
+            # Если нашли название блюда, добавляем его в список
+            # Не нужна дополнительная фильтрация, так как мы уже в разделе "БЛЮДА ИЗ МЯСА"
+            if dish_name and len(dish_name) > 2:
+                dishes.append(MenuItem(name=dish_name, weight=dish_weight, price=dish_price))
+                print(f"Найдено блюдо из мяса: {dish_name} | {dish_weight} | {dish_price}")
+        
+        print(f"Всего найдено мясных блюд: {len(dishes)}")
+        return dishes
+        
+    except Exception as e:
+        print(f"Ошибка при извлечении мясных блюд по диапазону: {e}")
+        return []
+
+
+def extract_meat_dishes_from_excel(excel_path: str) -> List[MenuItem]:
+    """Извлекает блюда из мяса - точный диапазон от 'БЛЮДА ИЗ МЯСА' до 'БЛЮДА ИЗ ПТИЦЫ'."""
+    try:
+        # Пробуем найти точный диапазон от "БЛЮДА ИЗ МЯСА" до "БЛЮДА ИЗ ПТИЦЫ"
+        dishes = extract_meat_dishes_by_range(excel_path)
+        if dishes:
+            return dishes
+            
+        # Если не нашли по диапазону, пробуем с остановкой
+        stop_keywords = ['БЛЮДА ИЗ ПТИЦЫ', 'ПТИЦА', 'РЫБНЫЕ БЛЮДА', 'БЛЮДА ИЗ РЫБЫ']
+        keywords = ['БЛЮДА ИЗ МЯСА', 'МЯСНЫЕ БЛЮДА', 'МЯСО']
         
         dishes = extract_dishes_from_excel_rows_with_stop(excel_path, keywords, stop_keywords)
         
         if dishes:
+            print(f"Найдено {len(dishes)} мясных блюд через построчный поиск с остановкой")
             return dishes
             
-        # Если не нашли точную секцию, пробуем поискать по ключевым словам, но исключаем супы
+        # Последняя попытка - поиск по ключевым словам с фильтрацией
         print("Поиск мясных блюд через колоночную структуру...")
         all_keywords = ['БЛЮДА ИЗ МЯСА', 'МЯСНЫЕ БЛЮДА', 'МЯСО']
         dishes = extract_dishes_from_excel(excel_path, all_keywords)
@@ -717,21 +856,170 @@ def extract_meat_dishes_from_excel(excel_path: str) -> List[MenuItem]:
             if filtered_dishes:
                 return filtered_dishes
         
-        # Если все еще не нашли, пробуем в других листах
-        print("Поиск мясных блюд в других листах...")
-        dishes = extract_dishes_from_multiple_sheets(excel_path, ['Обед', 'Гц', 'Мясные'])
-        
-        return dishes
+        return []
         
     except Exception as e:
         print(f"Ошибка при извлечении мясных блюд: {e}")
         return []
 
 
+def extract_poultry_dishes_by_range(excel_path: str) -> List[MenuItem]:
+    """Извлекает блюда из птицы из точного диапазона от 'БЛЮДА ИЗ ПТИЦЫ' до 'БЛЮДА ИЗ РЫБЫ'."""
+    try:
+        # Выбираем лист (приоритет листу с "касс")
+        xls = pd.ExcelFile(excel_path)
+        sheet_name = None
+        for nm in xls.sheet_names:
+            if 'касс' in str(nm).strip().lower():
+                sheet_name = nm
+                break
+        if sheet_name is None and xls.sheet_names:
+            sheet_name = xls.sheet_names[0]
+
+        # Читаем весь лист
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+        
+        def row_text(row) -> str:
+            parts = []
+            for v in row:
+                if pd.notna(v):
+                    parts.append(str(v))
+            return ' '.join(parts).strip()
+        
+        # Находим строку с заголовком "БЛЮДА ИЗ ПТИЦЫ"
+        start_row = None
+        end_row = None
+        
+        for i in range(len(df)):
+            row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+            
+            # Ищем начало секции блюд из птицы
+            if start_row is None:
+                if 'БЛЮДА ИЗ ПТИЦЫ' in row_content or ('ПТИЦ' in row_content and 'БЛЮДА' in row_content):
+                    start_row = i
+                    print(f"Найден заголовок блюд из птицы в строке {i + 1}: {row_content}")
+                    continue
+            
+            # Ищем конец секции (БЛЮДА ИЗ РЫБЫ)
+            if start_row is not None and end_row is None:
+                if 'БЛЮДА ИЗ РЫБЫ' in row_content or ('РЫБ' in row_content and 'БЛЮДА' in row_content):
+                    end_row = i
+                    print(f"Найден заголовок блюд из рыбы в строке {i + 1}: {row_content}")
+                    break
+        
+        if start_row is None:
+            print("Заголовок 'БЛЮДА ИЗ ПТИЦЫ' не найден")
+            return []
+        
+        if end_row is None:
+            # Если не найдены блюда из рыбы, ищем другие стоп-категории
+            end_row = len(df)
+            for i in range(start_row + 1, len(df)):
+                row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+                # Ищем другие категории как стоп-слова
+                if any(category in row_content for category in [
+                    'ГАРНИРЫ', 'НАПИТКИ', 'ДЕСЕРТЫ', 'САЛАТЫ', 'СЭНДВИЧ'
+                ]):
+                    end_row = i
+                    break
+        
+        print(f"Обрабатываем блюда из птицы от строки {start_row + 1} до строки {end_row}")
+        
+        # Извлекаем блюда из найденного диапазона
+        dishes: List[MenuItem] = []
+        
+        for i in range(start_row + 1, end_row):
+            if i >= len(df):
+                break
+                
+            row = df.iloc[i]
+            row_content = row_text(row)
+            
+            # Пропускаем пустые строки
+            if not row_content.strip():
+                continue
+                
+            # Пропускаем строки, которые выглядят как подзаголовки (все заглавные)
+            if row_content.isupper() and len(row_content) > 10:
+                continue
+                
+            # Ищем название блюда в первой непустой ячейке
+            dish_name = ""
+            dish_weight = ""
+            dish_price = ""
+            
+            # Проходим по всем ячейкам строки
+            for j, cell_value in enumerate(row):
+                if pd.notna(cell_value):
+                    cell_text = str(cell_value).strip()
+                    if not cell_text:
+                        continue
+                    
+                    # Первая значимая ячейка - это название блюда
+                    if not dish_name and not cell_text.isupper() and len(cell_text) > 3:
+                        # Проверяем, что это не цена и не вес
+                        if not re.match(r'^\d+([.,]\d+)?\s*(руб|₽|р\.?)?$', cell_text) and \
+                           not re.search(r'\d+\s*(г|гр|мл|л|шт)', cell_text, re.IGNORECASE):
+                            dish_name = cell_text
+                            continue
+                    
+                    # Ищем вес (содержит единицы измерения)
+                    if not dish_weight and re.search(r'\d+.*?(г|гр|грамм|мл|л|кг|шт)', cell_text, re.IGNORECASE):
+                        dish_weight = cell_text
+                        continue
+                    
+                    # Ищем цену (число, возможно с "руб" или символом рубля)
+                    if not dish_price and re.search(r'\d+', cell_text):
+                        # Проверяем, что это не вес
+                        if not re.search(r'г|гр|грамм|мл|л|кг|шт', cell_text, re.IGNORECASE):
+                            if cell_text.replace('.', '').replace(',', '').isdigit():
+                                dish_price = f"{cell_text} руб."
+                            elif re.search(r'\d+.*?(руб|₽|р\.?)', cell_text, re.IGNORECASE):
+                                dish_price = cell_text
+                            else:
+                                # Просто число - добавляем "руб."
+                                number_match = re.search(r'\d+([.,]\d+)?', cell_text)
+                                if number_match:
+                                    dish_price = f"{number_match.group()} руб."
+            
+            # Если нашли название блюда, добавляем его в список
+            if dish_name and len(dish_name) > 2:
+                dishes.append(MenuItem(name=dish_name, weight=dish_weight, price=dish_price))
+                print(f"Найдено блюдо из птицы: {dish_name} | {dish_weight} | {dish_price}")
+        
+        print(f"Всего найдено блюд из птицы: {len(dishes)}")
+        return dishes
+        
+    except Exception as e:
+        print(f"Ошибка при извлечении блюд из птицы по диапазону: {e}")
+        return []
+
+
 def extract_poultry_dishes_from_excel(excel_path: str) -> List[MenuItem]:
-    """Извлекает блюда из птицы."""
-    # Пробуем найти в листах Обед, Гц
-    return extract_dishes_from_multiple_sheets(excel_path, ['Обед', 'Гц', 'Птица', 'касса '])
+    """Извлекает блюда из птицы - точный диапазон от 'БЛЮДА ИЗ ПТИЦЫ' до 'БЛЮДА ИЗ РЫБЫ'."""
+    try:
+        # Пробуем найти точный диапазон от "БЛЮДА ИЗ ПТИЦЫ" до "БЛЮДА ИЗ РЫБЫ"
+        dishes = extract_poultry_dishes_by_range(excel_path)
+        if dishes:
+            return dishes
+            
+        # Если не нашли по диапазону, пробуем с остановкой
+        stop_keywords = ['БЛЮДА ИЗ РЫБЫ', 'РЫБА', 'РЫБНЫЕ БЛЮДА', 'ГАРНИРЫ']
+        keywords = ['БЛЮДА ИЗ ПТИЦЫ', 'ПТИЦА', 'КУРИНЫЕ БЛЮДА']
+        
+        dishes = extract_dishes_from_excel_rows_with_stop(excel_path, keywords, stop_keywords)
+        
+        if dishes:
+            print(f"Найдено {len(dishes)} блюд из птицы через построчный поиск с остановкой")
+            return dishes
+            
+        # Последняя попытка - поиск в листах
+        print("Поиск блюд из птицы через листы...")
+        return extract_dishes_from_multiple_sheets(excel_path, ['Обед', 'Гц', 'Птица', 'касса '])
+        
+    except Exception as e:
+        print(f"Ошибка при извлечении блюд из птицы: {e}")
+        return []
 
 
 def extract_fish_dishes_from_excel(excel_path: str) -> List[MenuItem]:
@@ -930,7 +1218,7 @@ def update_presentation_with_salads(presentation_path: str, salads: List[MenuIte
 
 def create_presentation_with_excel_data(template_path: str, excel_path: str, output_path: str) -> Tuple[bool, str]:
     """
-    Создает презентацию с салатами, первыми блюдами и блюдами из мяса.
+    Создает презентацию с салатами, первыми блюдами, блюдами из мяса и птицы.
     Остальные слайды остаются пустыми.
 
     Returns:
@@ -965,8 +1253,13 @@ def create_presentation_with_excel_data(template_path: str, excel_path: str, out
         meat_dishes = extract_meat_dishes_from_excel(excel_path)
         print(f"Блюда из мяса: найдено {len(meat_dishes)} блюд")
         
+        # Извлекаем блюда из птицы
+        print(f"🔍 Ищем блюда из птицы в файле: {excel_path}")
+        poultry_dishes = extract_poultry_dishes_from_excel(excel_path)
+        print(f"Блюда из птицы: найдено {len(poultry_dishes)} блюд")
+        
         # Проверяем, что хотя бы одна категория найдена
-        total_dishes = len(salads) + len(first_courses) + len(meat_dishes)
+        total_dishes = len(salads) + len(first_courses) + len(meat_dishes) + len(poultry_dishes)
         
         if total_dishes == 0:
             # Попробуем показать содержимое файла для диагностики
@@ -1005,7 +1298,7 @@ def create_presentation_with_excel_data(template_path: str, excel_path: str, out
             'salads': salads,
             'first_courses': first_courses,
             'meat': meat_dishes,
-            'poultry': [],        # Пустой список
+            'poultry': poultry_dishes,  # Блюда из птицы
             'fish': [],           # Пустой список
             'side_dishes': [],    # Пустой список
         }
@@ -1022,6 +1315,8 @@ def create_presentation_with_excel_data(template_path: str, excel_path: str, out
                 results.append(f"Первые блюда: {len(first_courses)} блюд")
             if len(meat_dishes) > 0:
                 results.append(f"Блюда из мяса: {len(meat_dishes)} блюд")
+            if len(poultry_dishes) > 0:
+                results.append(f"Блюда из птицы: {len(poultry_dishes)} блюд")
             
             message = "Презентация создана!\n" + "\n".join(results)
             return True, message
