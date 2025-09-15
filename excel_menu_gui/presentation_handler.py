@@ -1269,10 +1269,142 @@ def extract_fish_dishes_from_excel(excel_path: str) -> List[MenuItem]:
         return []
 
 
+def extract_side_dishes_by_range(excel_path: str) -> List[MenuItem]:
+    """Извлекает гарниры из точного диапазона от 'ГАРНИРЫ' до следующей категории."""
+    try:
+        # Выбираем лист (приоритет листу с "касс")
+        xls = pd.ExcelFile(excel_path)
+        sheet_name = None
+        for nm in xls.sheet_names:
+            if 'касс' in str(nm).strip().lower():
+                sheet_name = nm
+                break
+        if sheet_name is None and xls.sheet_names:
+            sheet_name = xls.sheet_names[0]
+
+        # Читаем весь лист
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+        
+        def row_text(row) -> str:
+            parts = []
+            for v in row:
+                if pd.notna(v):
+                    parts.append(str(v))
+            return ' '.join(parts).strip()
+        
+        # Находим строку с заголовком "ГАРНИРЫ"
+        start_row = None
+        end_row = None
+        
+        for i in range(len(df)):
+            row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+            
+            # Ищем начало секции гарниров
+            if start_row is None:
+                if 'ГАРНИРЫ' in row_content or 'ГАРНИР' in row_content:
+                    start_row = i
+                    print(f"Найден заголовок гарниров в строке {i + 1}: {row_content}")
+                    continue
+            
+            # Ищем конец секции (следующая категория)
+            if start_row is not None and end_row is None:
+                # Стоп-категории
+                if any(category in row_content for category in [
+                    'НАПИТКИ', 'ДЕСЕРТЫ', 'САЛАТЫ', 'СЭНДВИЧ', 'ЗАКУСКИ',
+                    'ПЕРВЫЕ БЛЮДА', 'ВТОРЫЕ БЛЮДА', 'БЛЮДА ИЗ', 'ВЫПЕЧКА'
+                ]):
+                    end_row = i
+                    print(f"Найден конец секции гарниров в строке {i + 1}: {row_content}")
+                    break
+        
+        if start_row is None:
+            print("Заголовок 'ГАРНИРЫ' не найден")
+            return []
+        
+        if end_row is None:
+            # Если не найдена следующая категория, берем до конца файла или максимум 30 строк
+            end_row = min(start_row + 30, len(df))  # Максимум 30 строк после заголовка
+        
+        print(f"Обрабатываем гарниры от строки {start_row + 1} до строки {end_row}")
+        
+        # Извлекаем блюда из найденного диапазона
+        dishes: List[MenuItem] = []
+        
+        for i in range(start_row + 1, end_row):
+            if i >= len(df):
+                break
+                
+            row = df.iloc[i]
+            row_content = row_text(row)
+            
+            # Пропускаем пустые строки
+            if not row_content.strip():
+                continue
+                
+            # Пропускаем строки, которые выглядят как подзаголовки (все заглавные)
+            if row_content.isupper() and len(row_content) > 10:
+                continue
+                
+            # Извлекаем данные из столбца E (индекс 4) и соседних столбцов
+            dish_name = ""
+            dish_weight = ""
+            dish_price = ""
+            
+            # Столбец E (индекс 4) - название блюда
+            if len(df.columns) > 4 and pd.notna(df.iloc[i, 4]):
+                name_text = str(df.iloc[i, 4]).strip()
+                # Проверяем, что это не заголовок категории и не пустая строка
+                if name_text and not name_text.isupper() and len(name_text) > 2:
+                    dish_name = name_text
+            
+            # Если нет названия в столбце E, пропускаем строку
+            if not dish_name:
+                continue
+            
+            # Столбец F (индекс 5) - вес/объем
+            if len(df.columns) > 5 and pd.notna(df.iloc[i, 5]):
+                weight_text = str(df.iloc[i, 5]).strip()
+                if weight_text:
+                    dish_weight = weight_text
+            
+            # Столбец G (индекс 6) - цена
+            if len(df.columns) > 6 and pd.notna(df.iloc[i, 6]):
+                price_text = str(df.iloc[i, 6]).strip()
+                if price_text:
+                    # Если это просто число, добавляем "руб."
+                    if price_text.replace('.', '').replace(',', '').isdigit():
+                        dish_price = f"{price_text} руб."
+                    else:
+                        dish_price = price_text
+            
+            # Если нашли название блюда, добавляем его в список
+            if dish_name and len(dish_name) > 2:
+                dishes.append(MenuItem(name=dish_name, weight=dish_weight, price=dish_price))
+                print(f"Найден гарнир: {dish_name} | {dish_weight} | {dish_price}")
+        
+        print(f"Всего найдено гарниров: {len(dishes)}")
+        return dishes
+        
+    except Exception as e:
+        print(f"Ошибка при извлечении гарниров по диапазону: {e}")
+        return []
+
+
 def extract_side_dishes_from_excel(excel_path: str) -> List[MenuItem]:
-    """Извлекает гарниры."""
-    # Пробуем найти в листах Раздача, Обед, Гц
-    return extract_dishes_from_multiple_sheets(excel_path, ['Раздача', 'Обед', 'Гц', 'Гарниры', 'касса '])
+    """Извлекает гарниры - точный диапазон от 'ГАРНИРЫ' до следующей категории."""
+    try:
+        # Сначала пробуем найти по точному диапазону в столбце E
+        dishes = extract_side_dishes_by_range(excel_path)
+        if dishes:
+            return dishes
+            
+        # Если не нашли по диапазону, пробуем через листы
+        print("Поиск гарниров через листы...")
+        return extract_dishes_from_multiple_sheets(excel_path, ['Раздача', 'Обед', 'Гц', 'Гарниры', 'касса '])
+        
+    except Exception as e:
+        print(f"Ошибка при извлечении гарниров: {e}")
+        return []
 
 
 def update_slide_with_dishes(slide, dishes: List[MenuItem]) -> bool:
@@ -1464,8 +1596,8 @@ def update_presentation_with_salads(presentation_path: str, salads: List[MenuIte
 
 def create_presentation_with_excel_data(template_path: str, excel_path: str, output_path: str) -> Tuple[bool, str]:
     """
-    Создает презентацию с салатами, первыми блюдами, блюдами из мяса и птицы.
-    Остальные слайды остаются пустыми.
+    Создает презентацию со всеми категориями блюд: салаты, первые блюда, 
+    блюда из мяса, птицы, рыбы и гарниры.
 
     Returns:
         Tuple[bool, str]: (успех, сообщение)
@@ -1509,8 +1641,13 @@ def create_presentation_with_excel_data(template_path: str, excel_path: str, out
         fish_dishes = extract_fish_dishes_from_excel(excel_path)
         print(f"Блюда из рыбы: найдено {len(fish_dishes)} блюд")
         
+        # Извлекаем гарниры
+        print(f"🔍 Ищем гарниры в файле: {excel_path}")
+        side_dishes = extract_side_dishes_from_excel(excel_path)
+        print(f"Гарниры: найдено {len(side_dishes)} блюд")
+        
         # Проверяем, что хотя бы одна категория найдена
-        total_dishes = len(salads) + len(first_courses) + len(meat_dishes) + len(poultry_dishes) + len(fish_dishes)
+        total_dishes = len(salads) + len(first_courses) + len(meat_dishes) + len(poultry_dishes) + len(fish_dishes) + len(side_dishes)
         
         if total_dishes == 0:
             # Попробуем показать содержимое файла для диагностики
@@ -1551,7 +1688,7 @@ def create_presentation_with_excel_data(template_path: str, excel_path: str, out
             'meat': meat_dishes,
             'poultry': poultry_dishes,  # Блюда из птицы
             'fish': fish_dishes,    # Блюда из рыбы
-            'side_dishes': [],      # Пустой список
+            'side_dishes': side_dishes,  # Гарниры
         }
 
         # Обновляем презентацию с найденными блюдами
@@ -1570,6 +1707,8 @@ def create_presentation_with_excel_data(template_path: str, excel_path: str, out
                 results.append(f"Блюда из птицы: {len(poultry_dishes)} блюд")
             if len(fish_dishes) > 0:
                 results.append(f"Блюда из рыбы: {len(fish_dishes)} блюд")
+            if len(side_dishes) > 0:
+                results.append(f"Гарниры: {len(side_dishes)} блюд")
             
             message = "Презентация создана!\n" + "\n".join(results)
             return True, message
