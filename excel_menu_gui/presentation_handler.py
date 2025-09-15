@@ -1123,7 +1123,12 @@ def update_slide_with_dishes(slide, dishes: List[MenuItem]) -> bool:
                     
                     # Цена
                     cell_price = row.cells[2]
-                    cell_price.text = dish.price
+                    # Убираем "руб." и другие обозначения валюты из цены для презентации
+                    price_text = dish.price
+                    # Убираем различные варианты написания рублей
+                    price_text = re.sub(r'\s*(руб\.?|рублей|р\.?|₽|RUB)', '', price_text, flags=re.IGNORECASE)
+                    price_text = price_text.strip()
+                    cell_price.text = price_text
                     if cell_price.text_frame.paragraphs:
                         paragraph = cell_price.text_frame.paragraphs[0]
                         paragraph.alignment = PP_ALIGN.CENTER
@@ -1258,8 +1263,13 @@ def create_presentation_with_excel_data(template_path: str, excel_path: str, out
         poultry_dishes = extract_poultry_dishes_from_excel(excel_path)
         print(f"Блюда из птицы: найдено {len(poultry_dishes)} блюд")
         
+        # Извлекаем блюда из рыбы
+        print(f"🔍 Ищем блюда из рыбы в файле: {excel_path}")
+        fish_dishes = extract_fish_dishes_from_excel(excel_path)
+        print(f"Блюда из рыбы: найдено {len(fish_dishes)} блюд")
+        
         # Проверяем, что хотя бы одна категория найдена
-        total_dishes = len(salads) + len(first_courses) + len(meat_dishes) + len(poultry_dishes)
+        total_dishes = len(salads) + len(first_courses) + len(meat_dishes) + len(poultry_dishes) + len(fish_dishes)
         
         if total_dishes == 0:
             # Попробуем показать содержимое файла для диагностики
@@ -1299,8 +1309,8 @@ def create_presentation_with_excel_data(template_path: str, excel_path: str, out
             'first_courses': first_courses,
             'meat': meat_dishes,
             'poultry': poultry_dishes,  # Блюда из птицы
-            'fish': [],           # Пустой список
-            'side_dishes': [],    # Пустой список
+            'fish': fish_dishes,    # Блюда из рыбы
+            'side_dishes': [],      # Пустой список
         }
 
         # Обновляем презентацию с найденными блюдами
@@ -1317,6 +1327,8 @@ def create_presentation_with_excel_data(template_path: str, excel_path: str, out
                 results.append(f"Блюда из мяса: {len(meat_dishes)} блюд")
             if len(poultry_dishes) > 0:
                 results.append(f"Блюда из птицы: {len(poultry_dishes)} блюд")
+            if len(fish_dishes) > 0:
+                results.append(f"Блюда из рыбы: {len(fish_dishes)} блюд")
             
             message = "Презентация создана!\n" + "\n".join(results)
             return True, message
