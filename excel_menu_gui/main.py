@@ -685,6 +685,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", str(e))
 
 
+
 def main():
     app = QApplication(sys.argv)
     w = MainWindow()
