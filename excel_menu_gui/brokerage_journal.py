@@ -217,149 +217,161 @@ class BrokerageJournalGenerator:
         return dishes
     
     def extract_categorized_dishes(self, menu_path: str) -> Dict[str, List[str]]:
-        """Извлекает блюда из меню, распределяя по нужным категориям в исходном порядке.
-        Категории: завтрак, салат, первое, мясо, курица, рыба, гарнир
+        """Извлекает блюда из меню, распределяя по колонкам.
+        Столбец A (0) - завтраки, столбец E (4) - первые блюда, мясо, курица, рыба, гарниры
         """
         result: Dict[str, List[str]] = {k: [] for k in ['завтрак','салат','первое','мясо','курица','рыба','гарнир']}
         
         def add_from_dataframe(df: pd.DataFrame):
-            # Новая логика: все блюда с начала листа до раздела «СЭНДВИЧИ» — это завтраки
-            breakfast_mode = True  # До «СЭНДВИЧИ» всё считается завтраками
-            current_category: Optional[str] = None
-            started = False
-            
             print(f"\nОтладка: DataFrame имеет {len(df)} строк и {len(df.columns)} колонок")
             
-            for row_idx, row in df.iterrows():
-                row_has_value = False
-                
-                # Собираем всю строку в одну строку
+            # Находим строку заголовков (где есть ЗАВТРАКИ)
+            header_row = None
+            for idx in range(min(10, len(df))):
+                row = df.iloc[idx]
                 row_text = ' '.join([str(cell).strip() for cell in row if pd.notna(cell) and str(cell).strip()])
-                row_text_upper = row_text.upper()
-
-                # Переключение режимов: пока breakfast_mode=True, реагируем только на СЭНДВИЧИ
-                if breakfast_mode:
-                    if 'СЭНДВИЧ' in row_text_upper or 'СЭНДВИЧИ' in row_text_upper:
-                        breakfast_mode = False
-                        current_category = None
-                        row_has_value = True
-                        started = True
-                        print("Отладка: Найден раздел СЭНДВИЧИ — завершили сбор завтраков")
-                else:
-                    # После завершения завтраков — обычная категоризация
-                    if 'САЛАТ' in row_text_upper and ('ХОЛОДН' in row_text_upper or 'ЗАКУСК' in row_text_upper):
-                        current_category = 'салат'
-                        row_has_value = True
-                        started = True
-                    elif 'ПЕРВЫЕ' in row_text_upper and 'БЛЮДА' in row_text_upper:
-                        current_category = 'первое'
-                        row_has_value = True
-                        started = True
-                    elif 'БЛЮДА ИЗ МЯСА' in row_text_upper:
-                        current_category = 'мясо'
-                        row_has_value = True
-                        started = True
-                    elif 'БЛЮДА ИЗ ПТИЦЫ' in row_text_upper:
-                        current_category = 'курица'
-                        row_has_value = True
-                        started = True
-                    elif 'БЛЮДА ИЗ РЫБЫ' in row_text_upper:
-                        current_category = 'рыба'
-                        row_has_value = True
-                        started = True
-                    elif 'ГАРНИРЫ' in row_text_upper:
-                        current_category = 'гарнир'
-                        row_has_value = True
-                        started = True
-                
-                # Если это не заголовок, ищем блюда
-                if not row_has_value:
-                    # Проверяем все ячейки в строке
-                    for cell in row:
-                        if pd.notna(cell) and str(cell).strip():
-                            cell_str = str(cell).strip()
-                            if not self._should_skip_cell(cell_str) and self._is_valid_dish(cell_str, []):
-                                if breakfast_mode:
-                                    result['завтрак'].append(cell_str)
-                                    # print(f"Отладка: Добавлено блюдо завтрака: '{cell_str}'")
-                                elif current_category:
-                                    result[current_category].append(cell_str)
-                                row_has_value = True
-                                started = True
-                                break  # Одно блюдо на строку
-                
-                # Останавливаемся на первой полностью пустой строке после начала списка
-                if not row_has_value and started:
+                if 'ЗАВТРАКИ' in row_text.upper():
+                    header_row = idx
                     break
+            
+            if header_row is None:
+                print("Отладка: Не найден заголовок ЗАВТРАКИ")
+                return
+            
+            print(f"Отладка: Найден заголовок в строке {header_row}")
+            
+            # Извлекаем завтраки из первого столбца (A)
+            current_category = None
+            for row_idx in range(header_row + 1, len(df)):
+                cell_value = df.iloc[row_idx, 0]  # Столбец A
+                if pd.notna(cell_value):
+                    cell_str = str(cell_value).strip()
+                    if not self._should_skip_cell(cell_str) and self._is_valid_dish(cell_str, []):
+                        result['завтрак'].append(cell_str)
+                elif len(result['завтрак']) > 0:  # Если уже есть блюда и встретили пустую ячейку
+                    break
+            
+            # Извлекаем остальные блюда из четвертого столбца (E)
+            current_category = None
+            for row_idx in range(header_row, len(df)):
+                if len(df.columns) > 4:  # Проверяем, что столбец существует
+                    cell_value = df.iloc[row_idx, 4]  # Столбец E (индекс 4)
+                    if pd.notna(cell_value):
+                        cell_str = str(cell_value).strip()
+                        
+                        # Проверяем, является ли это заголовком категории
+                        if 'ПЕРВЫЕ' in cell_str.upper() and 'БЛЮДА' in cell_str.upper():
+                            current_category = 'первое'
+                            print(f"Отладка: Найден заголовок ПЕРВЫЕ БЛЮДА в строке {row_idx}")
+                        elif 'БЛЮДА ИЗ МЯСА' in cell_str.upper():
+                            current_category = 'мясо'
+                            print(f"Отладка: Найден заголовок БЛЮДА ИЗ МЯСА в строке {row_idx}")
+                        elif 'БЛЮДА ИЗ ПТИЦЫ' in cell_str.upper():
+                            current_category = 'курица'
+                            print(f"Отладка: Найден заголовок БЛЮДА ИЗ ПТИЦЫ в строке {row_idx}")
+                        elif 'БЛЮДА ИЗ РЫБЫ' in cell_str.upper():
+                            current_category = 'рыба'
+                            print(f"Отладка: Найден заголовок БЛЮДА ИЗ РЫБЫ в строке {row_idx}")
+                        elif 'ГАРНИРЫ' in cell_str.upper():
+                            current_category = 'гарнир'
+                            print(f"Отладка: Найден заголовок ГАРНИРЫ в строке {row_idx}")
+                        elif 'САЛАТ' in cell_str.upper() or 'ХОЛОДН' in cell_str.upper():
+                            current_category = 'салат'
+                            print(f"Отладка: Найден заголовок САЛАТЫ в строке {row_idx}")
+                        elif current_category and not self._should_skip_cell(cell_str) and self._is_valid_dish(cell_str, []):
+                            # Это блюдо для текущей категории
+                            result[current_category].append(cell_str)
+                            print(f"Отладка: Добавлено блюдо '{cell_str}' в категорию '{current_category}'")
         
         def add_from_worksheet(ws):
-            # Новая логика: все блюда до появления «СЭНДВИЧИ» — это завтраки
-            breakfast_mode = True  # Начинаем с режима завтрака
-            current_category: Optional[str] = None
-            started = False
+            print(f"\nОтладка: Worksheet имеет {ws.max_row} строк и {ws.max_column} колонок")
             
-            for r in range(1, ws.max_row + 1):
-                row_has_value = False
+            # Находим строку заголовков (где есть ЗАВТРАКИ)
+            header_row = None
+            for row_idx in range(1, min(11, ws.max_row + 1)):
+                row_text = ''
+                for col_idx in range(1, ws.max_column + 1):
+                    cell_val = ws.cell(row=row_idx, column=col_idx).value
+                    if cell_val:
+                        row_text += str(cell_val).strip() + ' '
                 
-                # Собираем весь текст строки
-                row_texts = []
-                for c in range(1, ws.max_column + 1):
-                    val = ws.cell(row=r, column=c).value
-                    if val and str(val).strip():
-                        row_texts.append(str(val).strip())
-                
-                row_text = ' '.join(row_texts)
-                row_text_upper = row_text.upper()
-                
-                if breakfast_mode:
-                    if 'СЭНДВИЧ' in row_text_upper or 'СЭНДВИЧИ' in row_text_upper:
-                        breakfast_mode = False
-                        current_category = None
-                        row_has_value = True
-                        started = True
-                else:
-                    if 'САЛАТ' in row_text_upper and ('ХОЛОДН' in row_text_upper or 'ЗАКУСК' in row_text_upper):
-                        current_category = 'салат'
-                        row_has_value = True
-                        started = True
-                    elif 'ПЕРВЫЕ' in row_text_upper and 'БЛЮДА' in row_text_upper:
-                        current_category = 'первое'
-                        row_has_value = True
-                        started = True
-                    elif 'БЛЮДА ИЗ МЯСА' in row_text_upper:
-                        current_category = 'мясо'
-                        row_has_value = True
-                        started = True
-                    elif 'БЛЮДА ИЗ ПТИЦЫ' in row_text_upper:
-                        current_category = 'курица'
-                        row_has_value = True
-                        started = True
-                    elif 'БЛЮДА ИЗ РЫБЫ' in row_text_upper:
-                        current_category = 'рыба'
-                        row_has_value = True
-                        started = True
-                    elif 'ГАРНИРЫ' in row_text_upper:
-                        current_category = 'гарнир'
-                        row_has_value = True
-                        started = True
-                
-                # Если это не заголовок, ищем блюда
-                if not row_has_value:
-                    for c in range(1, ws.max_column + 1):
-                        val = ws.cell(row=r, column=c).value
-                        if val and str(val).strip():
-                            cell_str = str(val).strip()
-                            if not self._should_skip_cell(cell_str) and self._is_valid_dish(cell_str, []):
-                                if breakfast_mode:
-                                    result['завтрак'].append(cell_str)
-                                elif current_category:
-                                    result[current_category].append(cell_str)
-                                row_has_value = True
-                                started = True
-                                break
-                
-                if not row_has_value and started:
+                if 'ЗАВТРАКИ' in row_text.upper():
+                    header_row = row_idx
                     break
+            
+            if header_row is None:
+                print("Отладка: Не найден заголовок ЗАВТРАКИ в worksheet")
+                return
+            
+            print(f"Отладка: Найден заголовок в строке {header_row}")
+            
+            # Извлекаем завтраки и салаты из первого столбца (A)
+            current_category = 'завтрак'  # Начинаем с завтраков
+            
+            for row_idx in range(header_row + 1, ws.max_row + 1):
+                cell_value = ws.cell(row=row_idx, column=1).value  # Столбец A
+                if cell_value:
+                    cell_str = str(cell_value).strip()
+                    
+                    # Проверяем, является ли это заголовком салатов
+                    if 'САЛАТ' in cell_str.upper() and 'ХОЛОДН' in cell_str.upper():
+                        current_category = 'салат'  # Переключаемся на салаты
+                        print(f"Отладка: Переключились на салаты в строке {row_idx}")
+                        continue  # Пропускаем заголовок
+                    
+                    # Проверяем на другие заголовки разделов
+                    if ('СЭНДВИЧ' in cell_str.upper() or 
+                        'ПЕЛЬМЕН' in cell_str.upper() or
+                        'ВАРЕНИК' in cell_str.upper()):
+                        # Все равно добавляем блюда этих категорий в завтраки
+                        if not self._should_skip_cell(cell_str) and self._is_valid_dish(cell_str, []):
+                            result['завтрак'].append(cell_str)
+                            print(f"Отладка: Добавлено блюдо '{cell_str}' в завтраки из раздела {cell_str[:20]}")
+                        continue
+                    
+                    # Добавляем блюдо в текущую категорию
+                    if not self._should_skip_cell(cell_str) and self._is_valid_dish(cell_str, []):
+                        result[current_category].append(cell_str)
+                        print(f"Отладка: Добавлено блюдо '{cell_str}' в категорию '{current_category}'")
+                # Пустая ячейка - продолжаем в той же категории
+            
+            # Извлекаем остальные блюда со всех столбцов, начиная с четвертого
+            print(f"Отладка: Поиск данных в правых столбцах (колонки 4-{ws.max_column})")
+            
+            # Проходим по всем столбцам начиная с 4-го (D)
+            current_category = None
+            for col_idx in range(4, ws.max_column + 1):  # Колонки D, E, F, G, H...
+                print(f"Отладка: Проверяем колонку {col_idx} ({chr(64+col_idx)})")
+                
+                for row_idx in range(header_row, ws.max_row + 1):
+                    cell_value = ws.cell(row=row_idx, column=col_idx).value
+                    if cell_value:
+                        cell_str = str(cell_value).strip()
+                        
+                        # Проверяем, является ли это заголовком категории
+                        if 'ПЕРВЫЕ' in cell_str.upper() and 'БЛЮДА' in cell_str.upper():
+                            current_category = 'первое'
+                            print(f"Отладка: Найден заголовок ПЕРВЫЕ БЛЮДА в колонке {col_idx}, строке {row_idx}")
+                        elif 'БЛЮДА ИЗ МЯСА' in cell_str.upper():
+                            current_category = 'мясо'
+                            print(f"Отладка: Найден заголовок МЯСО в колонке {col_idx}, строке {row_idx}")
+                        elif 'БЛЮДА ИЗ ПТИЦЫ' in cell_str.upper():
+                            current_category = 'курица'
+                            print(f"Отладка: Найден заголовок ПТИЦА в колонке {col_idx}, строке {row_idx}")
+                        elif 'БЛЮДА ИЗ РЫБЫ' in cell_str.upper():
+                            current_category = 'рыба'
+                            print(f"Отладка: Найден заголовок РЫБА в колонке {col_idx}, строке {row_idx}")
+                        elif 'ГАРНИРЫ' in cell_str.upper():
+                            current_category = 'гарнир'
+                            print(f"Отладка: Найден заголовок ГАРНИРЫ в колонке {col_idx}, строке {row_idx}")
+                        elif 'НАПИТКИ' in cell_str.upper():
+                            # Останавливаемся на напитках - они нам не нужны
+                            print(f"Отладка: Найдены напитки, останавливаем сбор в колонке {col_idx}")
+                            break
+                        elif current_category and not self._should_skip_cell(cell_str) and self._is_valid_dish(cell_str, []):
+                            # Это блюдо для текущей категории
+                            result[current_category].append(cell_str)
+                            print(f"Отладка: Добавлено блюдо '{cell_str}' в категорию '{current_category}' (колонка {col_idx})")
         
         try:
             if menu_path.endswith('.xls'):
@@ -411,7 +423,7 @@ class BrokerageJournalGenerator:
             'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь',
             'завтрак', 'обед', 'ужин', 'полдник', 'время', 'дата',
             # напитки и подобные
-            'напит', 'сок', 'чай', 'кофе',
+            'напит', 'сок', 'чай', 'кофе', 'смузи', 'фреш',
             # дополнительные служебные
             'наименование', 'блюда', 'час', 'мин'
         ]
@@ -486,6 +498,38 @@ class BrokerageJournalGenerator:
             return False
             
         return True
+
+    def _is_section_header(self, text: str) -> bool:
+        """Определяет, является ли строка заголовком раздела (не блюдом)."""
+        if not text:
+            return False
+        txt = str(text).strip()
+        lower = txt.lower()
+        
+        # Точные заголовки разделов, которые точно нужно исключить
+        exact_headers = [
+            'салаты и холодные закуски',
+            'сэндвичи',
+            'пельмени', 
+            'вареники',
+            'соусы',
+            'первые блюда',
+            'блюда из мяса',
+            'блюда из птицы',
+            'блюда из рыбы',
+            'гарниры',
+            'завтраки'
+        ]
+        
+        # Проверяем точное совпадение с заголовками
+        if lower in exact_headers:
+            return True
+            
+        # Строки полностью в верхнем регистре и очень короткие (вероятно заголовки)
+        if txt.isupper() and len(txt) <= 15 and any(h in lower for h in ['блюд', 'салат', 'сэндвич']):
+            return True
+            
+        return False
     
     def _extract_from_worksheet(self, ws, dishes: Dict[str, List[str]]):
         """Извлекает блюда из листа openpyxl"""
@@ -512,7 +556,7 @@ class BrokerageJournalGenerator:
                         dishes[current_category].append(cell_str)
     
     def create_brokerage_journal(self, menu_path: str, template_path: str, output_path: str) -> Tuple[bool, str]:
-        """Создает бракеражный журнал на основе меню с листа касс, заполняя только первый столбец ЗАВТРАКАМИ. Время не изменяем."""
+        """Создает бракеражный журнал на основе меню с листа касс, заполняя столбец A завтраками, а столбец G - остальными блюдами. Время не изменяем."""
         try:
             # Проверяем существование шаблона
             if not Path(template_path).exists():
@@ -531,10 +575,24 @@ class BrokerageJournalGenerator:
             for category, dishes in categories.items():
                 print(f"{category}: {len(dishes)} блюд - {dishes}")
             
-            # Собираем ТОЛЬКО завтраки для первого столбца
+            # Собираем завтраки и салаты для левого столбца (A)
             left_list: List[str] = []
             left_list.extend(categories.get('завтрак', []))
-            print(f"\nКоличество завтраков для вставки: {len(left_list)}")
+            left_list.extend(categories.get('салат', []))
+            # Удаляем заголовки разделов
+            left_list = [d for d in left_list if not self._is_section_header(d)]
+            print(f"\nКоличество блюд для левого столбца (A): {len(left_list)}")
+            
+            # Собираем остальные блюда для правого столбца (G)
+            right_list: List[str] = []
+            right_list.extend(categories.get('первое', []))
+            right_list.extend(categories.get('мясо', []))
+            right_list.extend(categories.get('курица', []))
+            right_list.extend(categories.get('рыба', []))
+            right_list.extend(categories.get('гарнир', []))
+            # Удаляем заголовки разделов
+            right_list = [d for d in right_list if not self._is_section_header(d)]
+            print(f"Количество блюд для правого столбца (G): {len(right_list)}")
             
             # Открываем шаблон
             wb = openpyxl.load_workbook(template_path)
@@ -576,8 +634,8 @@ class BrokerageJournalGenerator:
                     break
                 stop_row += 1
             
-            # Заполняем ТОЛЬКО пустые ячейки первого столбца (A) блюдами из left_list, не меняя ничего другого
-            inserted = 0
+            # Заполняем ТОЛЬКО пустые ячейки первого столбца (A) блюдами из left_list
+            inserted_left = 0
             dish_idx = 0
             for r in range(start_row, stop_row):
                 if dish_idx >= len(left_list):
@@ -587,13 +645,29 @@ class BrokerageJournalGenerator:
                     ws.cell(row=r, column=1, value=left_list[dish_idx])
                     # НЕ МЕНЯЕМ время - оставляем как в шаблоне
                     dish_idx += 1
-                    inserted += 1
+                    inserted_left += 1
+                else:
+                    # Ячейка занята — не трогаем её и идем дальше
+                    continue
+            
+            # Заполняем ТОЛЬКО пустые ячейки седьмого столбца (G) блюдами из right_list
+            inserted_right = 0
+            dish_idx = 0
+            for r in range(start_row, stop_row):
+                if dish_idx >= len(right_list):
+                    break
+                current_val = ws.cell(row=r, column=7).value  # Столбец G = 7
+                if current_val in (None, ''):
+                    ws.cell(row=r, column=7, value=right_list[dish_idx])
+                    # НЕ МЕНЯЕМ время - оставляем как в шаблоне
+                    dish_idx += 1
+                    inserted_right += 1
                 else:
                     # Ячейка занята — не трогаем её и идем дальше
                     continue
             
             wb.save(output_path)
-            return True, f"Бракеражный журнал создан успешно для даты {date_str} (вставлено {inserted} блюд в левую колонку)"
+            return True, f"Бракеражный журнал создан успешно для даты {date_str} (вставлено {inserted_left} блюд в колонку A, {inserted_right} блюд в колонку G)"
         except Exception as e:
             return False, f"Ошибка при создании бракеражного журнала: {str(e)}"
     
