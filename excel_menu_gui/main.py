@@ -17,6 +17,7 @@ from comparator import compare_and_highlight, get_sheet_names, ColumnParseError
 from template_linker import default_template_path
 from theme import ThemeMode, apply_theme
 from presentation_handler import create_presentation_with_excel_data
+from brokerage_journal import create_brokerage_journal_from_menu
 
 
 class DropLineEdit(QLineEdit):
@@ -300,6 +301,17 @@ class MainWindow(QMainWindow):
         pla.addWidget(self.btnCreatePresentationWithData)
         root.addWidget(self.presentationActionsPanel)
         self.presentationActionsPanel.setVisible(False)
+        
+        # Панель действий внизу для бракеражного журнала (фиксированная)
+        self.brokerageActionsPanel = QWidget(); self.brokerageActionsPanel.setObjectName("actionsPanel")
+        bla = QHBoxLayout(self.brokerageActionsPanel)
+        bla.setContentsMargins(0, 8, 0, 0)  # небольшой отступ сверху
+        self.btnCreateBrokerageJournal = QPushButton("Скачать бракеражный журнал")
+        self.btnCreateBrokerageJournal.clicked.connect(self.do_create_brokerage_journal_with_data)
+        bla.addStretch(1)
+        bla.addWidget(self.btnCreateBrokerageJournal)
+        root.addWidget(self.brokerageActionsPanel)
+        self.brokerageActionsPanel.setVisible(False)
 
         # File 1
         self.edPath1 = DropLineEdit()
@@ -658,31 +670,93 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
     def do_brokerage_journal(self):
+        """Показывает панель для работы с бракеражным журналом"""
         try:
-            tpl = find_template("brokerage_journal_template.xlsx")
-            if not tpl:
-                QMessageBox.information(self, "Брокеражный журнал", "Шаблон брокеражного журнала не найден. Положите файл brokerage_journal_template.xlsx в папку templates.")
+            # Скрываем другие панели
+            if hasattr(self, "grpFirst"):
+                self.grpFirst.setVisible(False)
+            if hasattr(self, "grpSecond"):
+                self.grpSecond.setVisible(False)
+            if hasattr(self, "paramsBox"):
+                self.paramsBox.setVisible(False)
+            if hasattr(self, "actionsPanel"):
+                self.actionsPanel.setVisible(False)
+            if hasattr(self, "presentationActionsPanel"):
+                self.presentationActionsPanel.setVisible(False)
+            
+            # Показываем панель для работы с бракеражным журналом и её панель действий
+            if hasattr(self, "grpExcelFile"):
+                self.grpExcelFile.setVisible(True)
+                # Обновляем заголовок группы
+                self.grpExcelFile.setTitle("Файл меню для бракеражного журнала")
+            if hasattr(self, "brokerageActionsPanel"):
+                self.brokerageActionsPanel.setVisible(True)
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+    
+    def do_create_brokerage_journal_with_data(self):
+        """Создает бракеражный журнал с данными из Excel файла"""
+        try:
+            # Получаем путь к Excel файлу с меню
+            excel_path = self.edExcelPath.text().strip()
+            if not excel_path:
+                QMessageBox.warning(self, "Внимание", "Выберите Excel файл с меню.")
                 return
             
-            # Выбираем место сохранения брокеражного журнала
-            suggested_name = "брокеражный_журнал.xlsx"
+            # Проверяем существование Excel файла
+            if not Path(excel_path).exists():
+                QMessageBox.warning(self, "Ошибка", "Указанный Excel файл не найден.")
+                return
+                
+            # Находим шаблон бракеражного журнала
+            template_path = find_template("Бракеражный журнал шаблон.xlsx")
+            if not template_path:
+                QMessageBox.warning(self, "Шаблон", "Шаблон бракеражного журнала не найден. Положите файл 'Бракеражный журнал шаблон.xlsx' в папку templates.")
+                return
+            
+            # Получаем дату для названия файла
+            from brokerage_journal import BrokerageJournalGenerator
+            from datetime import date
+            
+            generator = BrokerageJournalGenerator()
+            menu_date = generator.extract_date_from_menu(excel_path)
+            
+            if menu_date:
+                date_str = menu_date.strftime("%d.%m.%Y")
+                suggested_name = f"бракеражный_журнал_{date_str}.xlsx"
+            else:
+                today_str = date.today().strftime("%d.%m.%Y")
+                suggested_name = f"бракеражный_журнал_{today_str}.xlsx"
+            
+            # Выбираем место сохранения бракеражного журнала
             desktop = Path.home() / "Desktop"
             suggested_path = str(desktop / suggested_name)
             
             save_path, _ = QFileDialog.getSaveFileName(
-                self, 
-                "Сохранить брокеражный журнал", 
-                suggested_path, 
+                self,
+                "Сохранить бракеражный журнал",
+                suggested_path,
                 "Excel (*.xlsx);;Excel (*.xls);;Все файлы (*.*)"
             )
             
             if not save_path:
                 return  # Пользователь отменил сохранение
+                
+            # Создаем бракеражный журнал с данными
+            success, message = create_brokerage_journal_from_menu(
+                excel_path, 
+                template_path, 
+                save_path
+            )
             
-            shutil.copy2(tpl, save_path)
-            QMessageBox.information(self, "Готово", f"Брокеражный журнал сохранён:\n{Path(save_path).name}")
+            if success:
+                QMessageBox.information(self, "Готово", f"Бракеражный журнал создан!\n{message}\nФайл: {Path(save_path).name}")
+            else:
+                QMessageBox.warning(self, "Ошибка", f"Не удалось создать бракеражный журнал:\n{message}")
+                
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", str(e))
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
 
 

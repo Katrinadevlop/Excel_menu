@@ -15,10 +15,45 @@ class MenuItem:
     price: str
 
 
+def detect_category_columns(df, category_row: int, category_name: str) -> List[int]:
+    """
+    Определяет, в каких столбцах находятся данные категории.
+    Анализирует строку с заголовком категории и возвращает список столбцов [name_col, weight_col, price_col].
+    """
+    try:
+        # Получаем содержимое строки с заголовком категории
+        row = df.iloc[category_row]
+        
+        # Ищем в каком столбце находится название категории
+        category_column = None
+        for col_idx in range(len(df.columns)):
+            if pd.notna(df.iloc[category_row, col_idx]):
+                cell_content = str(df.iloc[category_row, col_idx]).upper().replace('Ё', 'Е')
+                if category_name in cell_content:
+                    category_column = col_idx
+                    break
+        
+        if category_column is None:
+            # Если не нашли точное совпадение, используем правую часть по умолчанию
+            return [3, 4, 5]
+        
+        # Определяем набор столбцов на основе позиции категории
+        if category_column <= 2:
+            # Категория в левой части - данные тоже в левой части
+            return [0, 1, 2]
+        else:
+            # Категория в правой части - данные тоже в правой части  
+            return [3, 4, 5]
+            
+    except Exception:
+        # По умолчанию используем правую часть
+        return [3, 4, 5]
+
+
 def extract_dishes_from_excel_column(excel_path: str, category_keywords: List[str]) -> List[MenuItem]:
     """
-    Адаптированная функция для извлечения блюд из колоночной структуры Excel.
-    Работает с файлами, где категории - это заголовки колонок.
+    Универсальная функция для извлечения блюд из Excel в колоночной структуре.
+    Предполагает, что данные расположены в колонках: название блюда | вес | цена.
     """
     try:
         # Выбираем лист (приоритет листу с "касс")
@@ -789,12 +824,12 @@ def extract_first_courses_by_range(excel_path: str) -> List[MenuItem]:
 def extract_first_courses_from_excel(excel_path: str) -> List[MenuItem]:
     """Извлекает первые блюда из точного диапазона от 'ПЕРВЫЕ БЛЮДА' до следующей категории."""
     try:
-        # Сначала пробуем найти по точному диапазону в столбце A
+        # Сначала пробуем найти по точному диапазону в столбце E
         dishes = extract_first_courses_by_range(excel_path)
         if dishes:
             return dishes
             
-        # Если не нашли в столбце A, пробуем старый способ
+        # Если не нашли в столбце E, пробуем старый способ
         print("Поиск первых блюд через общую функцию...")
         keywords = ['ПЕРВЫЕ БЛЮДА', 'ПЕРВЫЕ']
         all_dishes = extract_dishes_from_excel(excel_path, keywords)
@@ -980,7 +1015,8 @@ def extract_meat_dishes_from_excel(excel_path: str) -> List[MenuItem]:
 
 
 def extract_poultry_dishes_by_range(excel_path: str) -> List[MenuItem]:
-    """Извлекает блюда из птицы из точного диапазона от 'БЛЮДА ИЗ ПТИЦЫ' до 'БЛЮДА ИЗ РЫБЫ'."""
+    """Извлекает блюда из птицы из точного диапазона от 'БЛЮДА ИЗ ПТИЦЫ' до 'БЛЮДА ИЗ РЫБЫ'.
+    Автоматически определяет структуру файла (6 или 7+ столбцов)."""
     try:
         # Выбираем лист (приоритет листу с "касс")
         xls = pd.ExcelFile(excel_path)
@@ -994,6 +1030,7 @@ def extract_poultry_dishes_by_range(excel_path: str) -> List[MenuItem]:
 
         # Читаем весь лист
         df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+        print(f"Размер файла: {len(df)} строк, {len(df.columns)} столбцов")
         
         def row_text(row) -> str:
             parts = []
@@ -1001,6 +1038,16 @@ def extract_poultry_dishes_by_range(excel_path: str) -> List[MenuItem]:
                 if pd.notna(v):
                     parts.append(str(v))
             return ' '.join(parts).strip()
+        
+        # Автоматическое определение структуры файла
+        # Структура 6 столбцов: D=название, E=вес, F=цена
+        # Структура 7+ столбцов: E=название, F=вес, G=цена
+        if len(df.columns) <= 6:
+            name_col, weight_col, price_col = 3, 4, 5  # D, E, F
+            print("Определена структура с 6 столбцами: D(название), E(вес), F(цена)")
+        else:
+            name_col, weight_col, price_col = 4, 5, 6  # E, F, G
+            print("Определена структура с 7+ столбцами: E(название), F(вес), G(цена)")
         
         # Находим строку с заголовком "БЛЮДА ИЗ ПТИЦЫ"
         start_row = None
@@ -1040,6 +1087,7 @@ def extract_poultry_dishes_by_range(excel_path: str) -> List[MenuItem]:
                     break
         
         print(f"Обрабатываем блюда из птицы от строки {start_row + 1} до строки {end_row}")
+        print(f"Используем столбцы: {chr(65+name_col)}(название), {chr(65+weight_col)}(вес), {chr(65+price_col)}(цена)")
         
         # Извлекаем блюда из найденного диапазона
         dishes: List[MenuItem] = []
@@ -1059,31 +1107,32 @@ def extract_poultry_dishes_by_range(excel_path: str) -> List[MenuItem]:
             if row_content.isupper() and len(row_content) > 10:
                 continue
                 
-            # Извлекаем данные из столбца E (индекс 4) и соседних столбцов
+            # Извлекаем данные из соответствующих столбцов
             dish_name = ""
             dish_weight = ""
             dish_price = ""
             
-            # Столбец E (индекс 4) - название блюда
-            if len(df.columns) > 4 and pd.notna(df.iloc[i, 4]):
-                name_text = str(df.iloc[i, 4]).strip()
+            # Название блюда
+            if len(df.columns) > name_col and pd.notna(df.iloc[i, name_col]):
+                name_text = str(df.iloc[i, name_col]).strip()
                 # Проверяем, что это не заголовок категории и не пустая строка
-                if name_text and not name_text.isupper() and len(name_text) > 2:
+                if (name_text and not name_text.isupper() and len(name_text) > 2 and
+                    'БЛЮДА ИЗ' not in name_text.upper()):
                     dish_name = name_text
             
-            # Если нет названия в столбце E, пропускаем строку
+            # Если нет названия, пропускаем строку
             if not dish_name:
                 continue
             
-            # Столбец F (индекс 5) - вес/объем
-            if len(df.columns) > 5 and pd.notna(df.iloc[i, 5]):
-                weight_text = str(df.iloc[i, 5]).strip()
+            # Вес/объем
+            if len(df.columns) > weight_col and pd.notna(df.iloc[i, weight_col]):
+                weight_text = str(df.iloc[i, weight_col]).strip()
                 if weight_text:
                     dish_weight = weight_text
             
-            # Столбец G (индекс 6) - цена
-            if len(df.columns) > 6 and pd.notna(df.iloc[i, 6]):
-                price_text = str(df.iloc[i, 6]).strip()
+            # Цена
+            if len(df.columns) > price_col and pd.notna(df.iloc[i, price_col]):
+                price_text = str(df.iloc[i, price_col]).strip()
                 if price_text:
                     # Если это просто число, добавляем "руб."
                     if price_text.replace('.', '').replace(',', '').isdigit():
@@ -1107,24 +1156,14 @@ def extract_poultry_dishes_by_range(excel_path: str) -> List[MenuItem]:
 def extract_poultry_dishes_from_excel(excel_path: str) -> List[MenuItem]:
     """Извлекает блюда из птицы - точный диапазон от 'БЛЮДА ИЗ ПТИЦЫ' до 'БЛЮДА ИЗ РЫБЫ'."""
     try:
-        # Пробуем найти точный диапазон от "БЛЮДА ИЗ ПТИЦЫ" до "БЛЮДА ИЗ РЫБЫ"
+        # Сначала пробуем найти по точному диапазону
         dishes = extract_poultry_dishes_by_range(excel_path)
         if dishes:
             return dishes
-            
-        # Если не нашли по диапазону, пробуем с остановкой
-        stop_keywords = ['БЛЮДА ИЗ РЫБЫ', 'РЫБА', 'РЫБНЫЕ БЛЮДА', 'ГАРНИРЫ']
-        keywords = ['БЛЮДА ИЗ ПТИЦЫ', 'ПТИЦА', 'КУРИНЫЕ БЛЮДА']
         
-        dishes = extract_dishes_from_excel_rows_with_stop(excel_path, keywords, stop_keywords)
-        
-        if dishes:
-            print(f"Найдено {len(dishes)} блюд из птицы через построчный поиск с остановкой")
-            return dishes
-            
-        # Последняя попытка - поиск в листах
+        # Если не нашли по диапазону, пробуем через листы (как было изначально)
         print("Поиск блюд из птицы через листы...")
-        return extract_dishes_from_multiple_sheets(excel_path, ['Обед', 'Гц', 'Птица', 'касса '])
+        return extract_dishes_from_multiple_sheets(excel_path, ['Раздача', 'Обед', 'Гц', 'Птица', 'касса '])
         
     except Exception as e:
         print(f"Ошибка при извлечении блюд из птицы: {e}")
@@ -1280,7 +1319,8 @@ def extract_fish_dishes_from_excel(excel_path: str) -> List[MenuItem]:
 
 
 def extract_side_dishes_by_range(excel_path: str) -> List[MenuItem]:
-    """Извлекает гарниры из точного диапазона от 'ГАРНИРЫ' до следующей категории."""
+    """Извлекает гарниры из точного диапазона от 'ГАРНИРЫ' до следующей категории.
+    Автоматически определяет структуру файла (6 или 7+ столбцов)."""
     try:
         # Выбираем лист (приоритет листу с "касс")
         xls = pd.ExcelFile(excel_path)
@@ -1294,6 +1334,7 @@ def extract_side_dishes_by_range(excel_path: str) -> List[MenuItem]:
 
         # Читаем весь лист
         df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+        print(f"Размер файла: {len(df)} строк, {len(df.columns)} столбцов")
         
         def row_text(row) -> str:
             parts = []
@@ -1301,6 +1342,10 @@ def extract_side_dishes_by_range(excel_path: str) -> List[MenuItem]:
                 if pd.notna(v):
                     parts.append(str(v))
             return ' '.join(parts).strip()
+        
+        # Автоматическое определение структуры файла
+        # Для гарниров смотрим, где находится заголовок "ГАРНИРЫ"
+        gourmet_column = None  # столбец с заголовком гарниров
         
         # Находим строку с заголовком "ГАРНИРЫ"
         start_row = None
@@ -1314,6 +1359,15 @@ def extract_side_dishes_by_range(excel_path: str) -> List[MenuItem]:
                 if 'ГАРНИРЫ' in row_content or 'ГАРНИР' in row_content:
                     start_row = i
                     print(f"Найден заголовок гарниров в строке {i + 1}: {row_content}")
+                    
+                    # Определяем, в каком столбце находится заголовок гарниров
+                    for col_idx in range(len(df.columns)):
+                        if pd.notna(df.iloc[i, col_idx]):
+                            cell_content = str(df.iloc[i, col_idx]).upper().replace('Ё', 'Е')
+                            if 'ГАРНИР' in cell_content:
+                                gourmet_column = col_idx
+                                print(f"Заголовок гарниров найден в столбце {chr(65 + col_idx)}")
+                                break
                     continue
             
             # Ищем конец секции (следующая категория)
@@ -1335,7 +1389,27 @@ def extract_side_dishes_by_range(excel_path: str) -> List[MenuItem]:
             # Если не найдена следующая категория, берем до конца файла или максимум 30 строк
             end_row = min(start_row + 30, len(df))  # Максимум 30 строк после заголовка
         
+        # Определяем столбцы для данных
+        if gourmet_column is not None:
+            # Если нашли заголовок в определенном столбце
+            if gourmet_column == 3:  # Столбец D - это 6-столбцовая структура, гарниры в левой части (A-B-C)
+                name_col, weight_col, price_col = 0, 1, 2  # A, B, C
+                print("Определена структура: гарниры в левой части A(название), B(вес), C(цена)")
+            else:
+                # Обычная 7+ столбцовая структура
+                name_col, weight_col, price_col = 4, 5, 6  # E, F, G
+                print("Определена структура: гарниры в правой части E(название), F(вес), G(цена)")
+        else:
+            # По умолчанию используем стандартную логику
+            if len(df.columns) <= 6:
+                name_col, weight_col, price_col = 0, 1, 2  # A, B, C для 6-столбцовой структуры
+                print("Определена структура по умолчанию для 6-столбцов: A(название), B(вес), C(цена)")
+            else:
+                name_col, weight_col, price_col = 4, 5, 6  # E, F, G для 7+-столбцовой структуры
+                print("Определена структура по умолчанию для 7+-столбцов: E(название), F(вес), G(цена)")
+        
         print(f"Обрабатываем гарниры от строки {start_row + 1} до строки {end_row}")
+        print(f"Используем столбцы: {chr(65+name_col)}(название), {chr(65+weight_col)}(вес), {chr(65+price_col)}(цена)")
         
         # Извлекаем блюда из найденного диапазона
         dishes: List[MenuItem] = []
@@ -1355,31 +1429,34 @@ def extract_side_dishes_by_range(excel_path: str) -> List[MenuItem]:
             if row_content.isupper() and len(row_content) > 10:
                 continue
                 
-            # Извлекаем данные из столбца E (индекс 4) и соседних столбцов
+            # Извлекаем данные из соответствующих столбцов
             dish_name = ""
             dish_weight = ""
             dish_price = ""
             
-            # Столбец E (индекс 4) - название блюда
-            if len(df.columns) > 4 and pd.notna(df.iloc[i, 4]):
-                name_text = str(df.iloc[i, 4]).strip()
+            # Название блюда
+            if len(df.columns) > name_col and pd.notna(df.iloc[i, name_col]):
+                name_text = str(df.iloc[i, name_col]).strip()
                 # Проверяем, что это не заголовок категории и не пустая строка
-                if name_text and not name_text.isupper() and len(name_text) > 2:
+                if (name_text and not name_text.isupper() and len(name_text) > 2 and
+                    'ГАРНИР' not in name_text.upper() and 
+                    not re.match(r'^\d+.*?(г|мл|л|шт)', name_text) and  # не вес
+                    not name_text.replace('.', '').replace(',', '').isdigit()):  # не цена
                     dish_name = name_text
             
-            # Если нет названия в столбце E, пропускаем строку
+            # Если нет названия, пропускаем строку
             if not dish_name:
                 continue
             
-            # Столбец F (индекс 5) - вес/объем
-            if len(df.columns) > 5 and pd.notna(df.iloc[i, 5]):
-                weight_text = str(df.iloc[i, 5]).strip()
+            # Вес/объем
+            if len(df.columns) > weight_col and pd.notna(df.iloc[i, weight_col]):
+                weight_text = str(df.iloc[i, weight_col]).strip()
                 if weight_text:
                     dish_weight = weight_text
             
-            # Столбец G (индекс 6) - цена
-            if len(df.columns) > 6 and pd.notna(df.iloc[i, 6]):
-                price_text = str(df.iloc[i, 6]).strip()
+            # Цена
+            if len(df.columns) > price_col and pd.notna(df.iloc[i, price_col]):
+                price_text = str(df.iloc[i, price_col]).strip()
                 if price_text:
                     # Если это просто число, добавляем "руб."
                     if price_text.replace('.', '').replace(',', '').isdigit():
@@ -1408,8 +1485,17 @@ def extract_side_dishes_from_excel(excel_path: str) -> List[MenuItem]:
         if dishes:
             return dishes
             
-        # Если не нашли по диапазону, пробуем через листы
-        print("Поиск гарниров через листы...")
+        # Если не нашли по диапазону, пробуем через общую функцию
+        print("Поиск гарниров через общую функцию...")
+        keywords = ['ГАРНИРЫ', 'ГАРНИР']
+        dishes = extract_dishes_from_excel(excel_path, keywords)
+        
+        if dishes:
+            print(f"Найдено {len(dishes)} гарниров через общую функцию")
+            return dishes
+            
+        # Последняя попытка - поиск через листы
+        print("Последняя попытка - поиск гарниров через листы...")
         return extract_dishes_from_multiple_sheets(excel_path, ['Раздача', 'Обед', 'Гц', 'Гарниры', 'касса '])
         
     except Exception as e:
