@@ -110,9 +110,13 @@ def apply_theme(app: QApplication, mode: ThemeMode) -> None:
     else:
         dark = False
 
+    # Сбрасываем старую палитру и стили перед применением новой темы
     app.setStyle("Fusion")
     p = build_palette(dark)
     app.setPalette(p)
+    
+    # Очищаем и заново устанавливаем stylesheet чтобы избежать смешения
+    app.setStyleSheet("")
 
     # Subtle style sheet for nicer group boxes and tooltips
     if dark:

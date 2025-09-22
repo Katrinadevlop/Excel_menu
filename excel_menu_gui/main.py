@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 
 from comparator import compare_and_highlight, get_sheet_names, ColumnParseError
 from template_linker import default_template_path
-from theme import ThemeMode, apply_theme
+from theme import ThemeMode, apply_theme, start_system_theme_watcher
 from presentation_handler import create_presentation_with_excel_data
 from brokerage_journal import create_brokerage_journal_from_menu
 
@@ -393,23 +393,39 @@ class MainWindow(QMainWindow):
         # Добавляем нижний растягивающий элемент, чтобы контент не растягивался равномерно, а был прижат кверху
         self.contentLayout.addStretch(1)
 
-        # Theming (System alias Dark by default)
-        self._theme_mode = ThemeMode.DARK  # «Системная» ведёт себя как «Тёмная»
+        # Theming initialization
+        self._theme_mode = ThemeMode.SYSTEM  # По умолчанию используем системную тему
         apply_theme(QApplication.instance(), self._theme_mode)
+        
+        # Запускаем таймер для отслеживания изменений системной темы
+        self._theme_timer = start_system_theme_watcher(
+            lambda is_light: self.handle_system_theme_change(is_light),
+            interval_ms=1000  # Проверка каждую секунду
+        )
 
     def log(self, msg: str):
         # Лог отключён по запросу — ничего не делаем
         pass
 
     def on_theme_changed(self, idx: int):
+        # Получаем режим темы из выбора пользователя
         if idx == 0:
-            # «Системная» ведёт себя как «Тёмная», чтобы визуально не отличалась
-            self._theme_mode = ThemeMode.DARK
+            self._theme_mode = ThemeMode.SYSTEM  # Системная тема
         elif idx == 1:
-            self._theme_mode = ThemeMode.LIGHT
+            self._theme_mode = ThemeMode.LIGHT   # Светлая тема
         else:
-            self._theme_mode = ThemeMode.DARK
+            self._theme_mode = ThemeMode.DARK    # Тёмная тема
+            
+        # Применяем выбранную тему
         apply_theme(QApplication.instance(), self._theme_mode)
+        
+    def handle_system_theme_change(self, is_light: bool):
+        """Обработчик изменения системной темы Windows"""
+        # Обновляем тему только если выбрана "Системная"
+        if self._theme_mode == ThemeMode.SYSTEM and self.cmbTheme.currentIndex() == 0:
+            # Применяем соответствующую системную тему
+            theme = ThemeMode.LIGHT if is_light else ThemeMode.DARK
+            apply_theme(QApplication.instance(), theme)
 
 
     def closeEvent(self, event):
