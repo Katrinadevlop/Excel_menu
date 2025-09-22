@@ -165,7 +165,7 @@ class MainWindow(QMainWindow):
         self.btnDownloadTemplate.clicked.connect(self.do_download_template)
         self.btnMakePresentation = QPushButton("Сделать презентацию")
         self.btnMakePresentation.clicked.connect(self.do_make_presentation)
-        self.btnBrokerage = QPushButton("Брокеражный журнал")
+        self.btnBrokerage = QPushButton("Бракеражный журнал")
         self.btnBrokerage.clicked.connect(self.do_brokerage_journal)
         self.btnShowCompare = QPushButton("Сравнить меню")
         self.btnShowCompare.clicked.connect(self.show_compare_sections)
