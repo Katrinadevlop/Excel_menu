@@ -251,41 +251,45 @@ class BrokerageJournalGenerator:
                 elif len(result['завтрак']) > 0:  # Если уже есть блюда и встретили пустую ячейку
                     break
             
-            # Извлекаем остальные блюда из четвертого столбца (E)
+            # Извлекаем остальные блюда из правых столбцов (начиная с 3-го)
             current_category = None
-            for row_idx in range(header_row, len(df)):
-                if len(df.columns) > 4:  # Проверяем, что столбец существует
-                    cell_value = df.iloc[row_idx, 4]  # Столбец E (индекс 4)
+            
+            # Проверяем колонки 3, 4, 5... (D, E, F...)
+            for col_idx in range(3, len(df.columns)):
+                print(f"Отладка: Проверяем колонку {col_idx} ({chr(65+col_idx)})")
+                
+                for row_idx in range(header_row, len(df)):
+                    cell_value = df.iloc[row_idx, col_idx]
                     if pd.notna(cell_value):
                         cell_str = str(cell_value).strip()
                         
                         # Проверяем, является ли это заголовком категории
                         if 'ПЕРВЫЕ' in cell_str.upper() and 'БЛЮДА' in cell_str.upper():
                             current_category = 'первое'
-                            print(f"Отладка: Найден заголовок ПЕРВЫЕ БЛЮДА в строке {row_idx}")
+                            print(f"Отладка: Найден заголовок ПЕРВЫЕ БЛЮДА в колонке {col_idx}, строке {row_idx}")
                         elif 'БЛЮДА ИЗ МЯСА' in cell_str.upper():
                             current_category = 'мясо'
-                            print(f"Отладка: Найден заголовок БЛЮДА ИЗ МЯСА в строке {row_idx}")
+                            print(f"Отладка: Найден заголовок МЯСО в колонке {col_idx}, строке {row_idx}")
                         elif 'БЛЮДА ИЗ ПТИЦЫ' in cell_str.upper():
                             current_category = 'курица'
-                            print(f"Отладка: Найден заголовок БЛЮДА ИЗ ПТИЦЫ в строке {row_idx}")
+                            print(f"Отладка: Найден заголовок ПТИЦА в колонке {col_idx}, строке {row_idx}")
                         elif 'БЛЮДА ИЗ РЫБЫ' in cell_str.upper():
                             current_category = 'рыба'
-                            print(f"Отладка: Найден заголовок БЛЮДА ИЗ РЫБЫ в строке {row_idx}")
+                            print(f"Отладка: Найден заголовок РЫБА в колонке {col_idx}, строке {row_idx}")
                         elif 'ГАРНИРЫ' in cell_str.upper():
                             current_category = 'гарнир'
-                            print(f"Отладка: Найден заголовок ГАРНИРЫ в строке {row_idx}")
+                            print(f"Отладка: Найден заголовок ГАРНИРЫ в колонке {col_idx}, строке {row_idx}")
                         elif 'НАПИТКИ' in cell_str.upper():
                             # Останавливаемся на напитках - больше ничего не добавляем
-                            print(f"Отладка: Найдены НАПИТКИ в строке {row_idx}, прекращаем сбор данных")
+                            print(f"Отладка: Найдены НАПИТКИ в колонке {col_idx}, строке {row_idx}, прекращаем сбор")
                             return  # Полностью выходим из функции
                         elif 'САЛАТ' in cell_str.upper() or 'ХОЛОДН' in cell_str.upper():
                             current_category = 'салат'
-                            print(f"Отладка: Найден заголовок САЛАТЫ в строке {row_idx}")
+                            print(f"Отладка: Найден заголовок САЛАТЫ в колонке {col_idx}, строке {row_idx}")
                         elif current_category and not self._should_skip_cell(cell_str) and self._is_valid_dish(cell_str, []):
                             # Это блюдо для текущей категории
                             result[current_category].append(cell_str)
-                            print(f"Отладка: Добавлено блюдо '{cell_str}' в категорию '{current_category}'")
+                            print(f"Отладка: Добавлено блюдо '{cell_str}' в категорию '{current_category}' (колонка {col_idx})")
         
         def add_from_worksheet(ws):
             print(f"\nОтладка: Worksheet имеет {ws.max_row} строк и {ws.max_column} колонок")
