@@ -1,0 +1,7 @@
+﻿# Build files
+build/
+dist/
+*.zip
+*.exe
+__pycache__/
+*.pyc
