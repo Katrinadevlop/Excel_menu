@@ -542,6 +542,9 @@ class MainWindow(QMainWindow):
                 self.grpExcelFile.setVisible(False)
             if hasattr(self, "presentationActionsPanel"):
                 self.presentationActionsPanel.setVisible(False)
+            # Скрываем панель бракеражного журнала при переходе на сравнение
+            if hasattr(self, "brokerageActionsPanel"):
+                self.brokerageActionsPanel.setVisible(False)
             
             # Показать формы сравнения и панель действий
             if hasattr(self, "grpFirst"):
@@ -614,6 +617,9 @@ class MainWindow(QMainWindow):
                 self.paramsBox.setVisible(False)
             if hasattr(self, "actionsPanel"):
                 self.actionsPanel.setVisible(False)
+            # Скрываем панель бракеражного журнала при переходе на презентации
+            if hasattr(self, "brokerageActionsPanel"):
+                self.brokerageActionsPanel.setVisible(False)
             
             # Показываем панель для работы с презентациями и её панель действий
             if hasattr(self, "grpExcelFile"):

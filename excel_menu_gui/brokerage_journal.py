@@ -275,6 +275,10 @@ class BrokerageJournalGenerator:
                         elif 'ГАРНИРЫ' in cell_str.upper():
                             current_category = 'гарнир'
                             print(f"Отладка: Найден заголовок ГАРНИРЫ в строке {row_idx}")
+                        elif 'НАПИТКИ' in cell_str.upper():
+                            # Останавливаемся на напитках - больше ничего не добавляем
+                            print(f"Отладка: Найдены НАПИТКИ в строке {row_idx}, прекращаем сбор данных")
+                            return  # Полностью выходим из функции
                         elif 'САЛАТ' in cell_str.upper() or 'ХОЛОДН' in cell_str.upper():
                             current_category = 'салат'
                             print(f"Отладка: Найден заголовок САЛАТЫ в строке {row_idx}")
@@ -365,9 +369,9 @@ class BrokerageJournalGenerator:
                             current_category = 'гарнир'
                             print(f"Отладка: Найден заголовок ГАРНИРЫ в колонке {col_idx}, строке {row_idx}")
                         elif 'НАПИТКИ' in cell_str.upper():
-                            # Останавливаемся на напитках - они нам не нужны
-                            print(f"Отладка: Найдены напитки, останавливаем сбор в колонке {col_idx}")
-                            break
+                            # Останавливаемся на напитках - больше ничего не добавляем
+                            print(f"Отладка: Найдены НАПИТКИ в колонке {col_idx}, строке {row_idx}, полностью прекращаем сбор")
+                            return  # Полностью выходим из функции
                         elif current_category and not self._should_skip_cell(cell_str) and self._is_valid_dish(cell_str, []):
                             # Это блюдо для текущей категории
                             result[current_category].append(cell_str)
@@ -424,6 +428,8 @@ class BrokerageJournalGenerator:
             'завтрак', 'обед', 'ужин', 'полдник', 'время', 'дата',
             # напитки и подобные
             'напит', 'сок', 'чай', 'кофе', 'смузи', 'фреш',
+            # соусы - исключаем полностью
+            'соус', 'майонез', 'кетчуп',
             # дополнительные служебные
             'наименование', 'блюда', 'час', 'мин'
         ]
@@ -435,6 +441,10 @@ class BrokerageJournalGenerator:
         for skip_word in skip_words:
             if skip_word in cell_lower:
                 return True
+        
+        # Пропускаем строки с объемами напитков
+        if re.search(r'\d+/\d+\s*мл|\d+\s*мл|200/300мл|300мл|225\s*мл', cell_str):
+            return True
         
         # Пропускаем строки, состоящие только из чисел и символов
         if re.match(r'^[\d\s\.,/г-]+$', cell_str):
