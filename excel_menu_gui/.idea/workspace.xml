@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="187e6e65-539b-4810-a0f8-8fbe6fab9386" name="Changes" comment="Изменены отступы в вкладке сранения меню, в дополнительных параметрах, также налажена навигация между страницами">
+      <change beforePath="$PROJECT_DIR$/.idea/.gitignore" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/excel_menu_gui.iml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/modules.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/18 сентября - четверг.xls" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/DEPLOYMENT_SUMMARY.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/FINAL_REPORT.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/README_fish_garnish.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/analyze_brokerage_files.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/analyze_brokerage_template.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/analyze_created_journal.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/analyze_excel_structure.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/check_table_structure.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/commit.bat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/commit_changes.bat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/commit_changes.ps1" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/create_test_menu.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/debug_all_slides.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/debug_dish_problems.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/debug_excel.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/debug_extraction_issues.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/debug_specific_file.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/debug_structure.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/diagnose_18_sep.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/diagnose_excel_structure.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/do_commit.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/final_brokerage_test.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/final_diagnosis.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/final_fish_test.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/find_real_fish.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/git_commit_now.bat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/quick_test.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/run_test.bat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/simple_test.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/structure_analysis.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_18_sept_FIXED.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_18_september.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_18_september_output.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_all.bat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_all_breakfast_before_salads.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_all_categories.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_all_slides.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_br.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_breakfast_column_fixed.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_breakfast_debug.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_brokerage_journal.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_correct_menu.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_dish_extraction.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_extraction.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_filled_template.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_final_brokerage.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_final_corrected.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_final_journal.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_final_result.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_fish.bat" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_fish_debug.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_fish_dishes.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_fish_extraction.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_fish_extraction_from_downloads.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_fish_garnish.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_fixed_slides.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_full_presentation.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_headers.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_improved_output.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_meat_extraction.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_only_breakfast.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_output_both_columns.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_output_final.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_output_fixed_columns.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_output_journal.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_output_updated_columns.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_poultry_fix.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_presentation_content.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_problematic_file_presentation.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_real_menu.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_side_dishes_fix.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_template_filler.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_updated_brokerage.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ИСПРАВЛЕНИЯ_ГОТОВО.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ИТОГОВЫЙ_БРАКЕРАЖНЫЙ_ЖУРНАЛ.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/КАК_СДЕЛАТЬ_КОММИТ.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ПРОВЕРКА_ИСПРАВЛЕНИЙ.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/РЕЗЮМЕ_РАБОТ.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/СТАРТ_ПРОВЕРКИ.txt" beforeDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/.." />
+    <option name="RESET_MODE" value="HARD" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 2
+}</component>
+  <component name="ProjectId" id="32My77mvcIq8V2bScy3RDW7OMMS" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;Python.main.executor&quot;: &quot;Run&quot;,
+    &quot;Python.presentation_handler.executor&quot;: &quot;Run&quot;,
+    &quot;Python.template_linker.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/katya/Desktop/menurepit/excel_menu_gui&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  }
+}</component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-7e47963ff851-f0eec537fc84-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-252.23892.515" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="187e6e65-539b-4810-a0f8-8fbe6fab9386" name="Changes" comment="" />
+      <created>1757244565916</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1757244565916</updated>
+      <workItem from="1757244567118" duration="13674000" />
+      <workItem from="1757964598504" duration="3418000" />
+      <workItem from="1758048779099" duration="3410000" />
+      <workItem from="1758354044957" duration="5000" />
+      <workItem from="1758354058944" duration="541000" />
+    </task>
+    <task id="LOCAL-00001" summary="Улучшения обработки первых блюд и цен в презентации: вернули извлечение всех первых блюд без фильтрации, добавили удаление руб из цен, восстановили рыбные блюда">
+      <option name="closed" value="true" />
+      <created>1757965212060</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1757965212060</updated>
+    </task>
+    <task id="LOCAL-00002" summary="Гарниры сохраняются правильно">
+      <option name="closed" value="true" />
+      <created>1757967254809</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1757967254809</updated>
+    </task>
+    <task id="LOCAL-00003" summary="Изменены отступы в вкладке сранения меню, в дополнительных параметрах, также налажена навигация между страницами">
+      <option name="closed" value="true" />
+      <created>1758586261519</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1758586261519</updated>
+    </task>
+    <task id="LOCAL-00004" summary="Изменены отступы в вкладке сранения меню, в дополнительных параметрах, также налажена навигация между страницами">
+      <option name="closed" value="true" />
+      <created>1758586269956</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1758586269956</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Улучшения обработки первых блюд и цен в презентации: вернули извлечение всех первых блюд без фильтрации, добавили удаление руб из цен, восстановили рыбные блюда" />
+    <MESSAGE value="Гарниры сохраняются правильно" />
+    <MESSAGE value="Изменены отступы в вкладке сранения меню, в дополнительных параметрах, также налажена навигация между страницами" />
+    <option name="LAST_COMMIT_MESSAGE" value="Изменены отступы в вкладке сранения меню, в дополнительных параметрах, также налажена навигация между страницами" />
+  </component>
+  <component name="com.intellij.coverage.CoverageDataManagerImpl">
+    <SUITE FILE_PATH="coverage/excel_menu_gui$main.coverage" NAME="main Coverage Results" MODIFIED="1757260396727" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/excel_menu_gui$presentation_handler.coverage" NAME="presentation_handler Coverage Results" MODIFIED="1757258549952" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/excel_menu_gui$template_linker.coverage" NAME="template_linker Coverage Results" MODIFIED="1757967165229" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+  </component>
+</project>
