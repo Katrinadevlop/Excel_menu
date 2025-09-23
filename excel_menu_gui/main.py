@@ -18,6 +18,7 @@ from template_linker import default_template_path
 from theme import ThemeMode, apply_theme, start_system_theme_watcher
 from presentation_handler import create_presentation_with_excel_data
 from brokerage_journal import create_brokerage_journal_from_menu
+from menu_template_filler import MenuTemplateFiller
 
 
 class DropLineEdit(QLineEdit):
@@ -222,8 +223,8 @@ class MainWindow(QMainWindow):
             }
             /* Компактные элементы внутри параметров без рамки */
             #paramsFrame QCheckBox, #paramsFrame QLabel {
-                padding: 2px;
-                margin: 0px 6px 0px 0px; /* небольшой горизонтальный зазор между элементами */
+                padding: 6px 2px;
+                margin: 4px 8px 4px 0px; /* увеличенные вертикальные и горизонтальные отступы */
             }
             #paramsFrame QCheckBox::indicator {
                 width: 14px;
@@ -273,7 +274,7 @@ class MainWindow(QMainWindow):
         excel_group_layout.addWidget(label_caption("Excel файл с меню (все категории)"))
         excel_group_layout.addWidget(excel_row)
         
-        self.grpExcelFile = FileDropGroup("Файл меню для презентации (6 категорий)", self.edExcelPath, excel_group)
+        self.grpExcelFile = FileDropGroup("Файл меню для презентации", self.edExcelPath, excel_group)
         # Делаем такую же компактную высоту и отступы, как у панелей сравнения
         self.grpExcelFile.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.grpExcelFile.setMinimumHeight(95)
@@ -312,6 +313,17 @@ class MainWindow(QMainWindow):
         bla.addWidget(self.btnCreateBrokerageJournal)
         root.addWidget(self.brokerageActionsPanel)
         self.brokerageActionsPanel.setVisible(False)
+        
+        # Панель действий внизу для шаблона меню (фиксированная)
+        self.templateActionsPanel = QWidget(); self.templateActionsPanel.setObjectName("actionsPanel")
+        tla = QHBoxLayout(self.templateActionsPanel)
+        tla.setContentsMargins(0, 8, 0, 0)  # небольшой отступ сверху
+        self.btnFillTemplate = QPushButton("Заполнить и скачать шаблон меню")
+        self.btnFillTemplate.clicked.connect(self.do_fill_template_with_data)
+        tla.addStretch(1)
+        tla.addWidget(self.btnFillTemplate)
+        root.addWidget(self.templateActionsPanel)
+        self.templateActionsPanel.setVisible(False)
 
         # File 1
         self.edPath1 = DropLineEdit()
@@ -372,12 +384,12 @@ class MainWindow(QMainWindow):
         self.paramsBox.setObjectName("paramsBox")
         self.paramsBox.setCheckable(True)
         self.paramsBox.setChecked(False)
-        # Устанавливаем компактную высоту для панели параметров
+        # Устанавливаем увеличенную высоту для панели параметров
         self.paramsBox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.paramsBox.setMaximumHeight(40)
+        self.paramsBox.setMaximumHeight(55)
         lparams = QVBoxLayout(self.paramsBox)
-        lparams.setContentsMargins(0, 0, 0, 0)  # полностью убираем отступы
-        lparams.setSpacing(0)  # убираем промежутки между элементами
+        lparams.setContentsMargins(0, 10, 0, 0)  # полностью убираем отступы
+        lparams.setSpacing(8)  # добавляем промежуток между заголовком и содержимым
         # Контейнер параметров без дополнительной рамки
         self._paramsFrame = QFrame(); self._paramsFrame.setObjectName("paramsFrame")
         lf = QHBoxLayout(self._paramsFrame)
@@ -545,6 +557,9 @@ class MainWindow(QMainWindow):
             # Скрываем панель бракеражного журнала при переходе на сравнение
             if hasattr(self, "brokerageActionsPanel"):
                 self.brokerageActionsPanel.setVisible(False)
+            # Скрываем панель шаблонов при переходе на сравнение
+            if hasattr(self, "templateActionsPanel"):
+                self.templateActionsPanel.setVisible(False)
             
             # Показать формы сравнения и панель действий
             if hasattr(self, "grpFirst"):
@@ -570,38 +585,32 @@ class MainWindow(QMainWindow):
             pass
 
     def do_download_template(self):
+        """Показывает панель для работы с шаблоном меню"""
         try:
-            tpl = default_template_path()
-            if not Path(tpl).exists():
-                QMessageBox.warning(self, "Шаблон", f"Шаблон не найден: {tpl}\nСначала положите файл в папку templates/")
-                return
+            # Скрываем другие панели
+            if hasattr(self, "grpFirst"):
+                self.grpFirst.setVisible(False)
+            if hasattr(self, "grpSecond"):
+                self.grpSecond.setVisible(False)
+            if hasattr(self, "paramsBox"):
+                self.paramsBox.setVisible(False)
+            if hasattr(self, "actionsPanel"):
+                self.actionsPanel.setVisible(False)
+            if hasattr(self, "presentationActionsPanel"):
+                self.presentationActionsPanel.setVisible(False)
+            if hasattr(self, "brokerageActionsPanel"):
+                self.brokerageActionsPanel.setVisible(False)
             
-            # Определяем расширение исходного файла
-            tpl_path = Path(tpl)
-            ext = tpl_path.suffix
-            
-            # Выбираем место сохранения шаблона
-            desktop = Path.home() / "Desktop"
-            if ext.lower() == '.xlsx':
-                suggested_name = "Шаблон_меню.xlsx"
-            else:
-                suggested_name = "menu_template.xls"
-            
-            suggested_path = str(desktop / suggested_name)
-            
-            save_path, _ = QFileDialog.getSaveFileName(
-                self, 
-                "Сохранить шаблон меню", 
-                suggested_path, 
-                "Excel (*.xlsx);;Excel (*.xls);;Все файлы (*.*)"
-            )
-            
-            if not save_path:
-                return  # Пользователь отменил сохранение
-            
-            shutil.copy2(tpl, save_path)
-            self.log(f"Шаблон скачан: {save_path}")
-            QMessageBox.information(self, "Готово", f"Шаблон меню сохранён:\n{Path(save_path).name}")
+            # Показываем панель для работы с шаблоном меню и её панель действий
+            if hasattr(self, "grpExcelFile"):
+                self.grpExcelFile.setVisible(True)
+                # Обновляем заголовок группы
+                self.grpExcelFile.setTitle("Файл меню для заполнения шаблона")
+                # Обновляем подсказку
+                self.edExcelPath.setPlaceholderText("Выберите Excel файл с меню для заполнения шаблона...")
+            if hasattr(self, "templateActionsPanel"):
+                self.templateActionsPanel.setVisible(True)
+                
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
@@ -620,10 +629,17 @@ class MainWindow(QMainWindow):
             # Скрываем панель бракеражного журнала при переходе на презентации
             if hasattr(self, "brokerageActionsPanel"):
                 self.brokerageActionsPanel.setVisible(False)
+            # Скрываем панель шаблонов при переходе на презентации
+            if hasattr(self, "templateActionsPanel"):
+                self.templateActionsPanel.setVisible(False)
             
             # Показываем панель для работы с презентациями и её панель действий
             if hasattr(self, "grpExcelFile"):
                 self.grpExcelFile.setVisible(True)
+                # Обновляем заголовок группы для презентации
+                self.grpExcelFile.setTitle("Файл меню для презентации")
+                # Обновляем подсказку для презентации
+                self.edExcelPath.setPlaceholderText("Выберите Excel файл с меню (салаты, первые блюда, мясо, птица, рыба, гарниры)...")
             if hasattr(self, "presentationActionsPanel"):
                 self.presentationActionsPanel.setVisible(True)
                 
@@ -705,12 +721,17 @@ class MainWindow(QMainWindow):
                 self.actionsPanel.setVisible(False)
             if hasattr(self, "presentationActionsPanel"):
                 self.presentationActionsPanel.setVisible(False)
+            # Скрываем панель шаблонов при переходе к бракеражному журналу
+            if hasattr(self, "templateActionsPanel"):
+                self.templateActionsPanel.setVisible(False)
             
             # Показываем панель для работы с бракеражным журналом и её панель действий
             if hasattr(self, "grpExcelFile"):
                 self.grpExcelFile.setVisible(True)
-                # Обновляем заголовок группы
+                # Обновляем заголовок группы для бракеражного журнала
                 self.grpExcelFile.setTitle("Файл меню для бракеражного журнала")
+                # Обновляем подсказку для бракеражного журнала
+                self.edExcelPath.setPlaceholderText("Выберите Excel файл с меню для бракеражного журнала...")
             if hasattr(self, "brokerageActionsPanel"):
                 self.brokerageActionsPanel.setVisible(True)
                 
@@ -780,6 +801,70 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
+    def do_fill_template_with_data(self):
+        """Заполняет шаблон меню данными из Excel файла"""
+        try:
+            # Получаем путь к Excel файлу с меню
+            excel_path = self.edExcelPath.text().strip()
+            if not excel_path:
+                QMessageBox.warning(self, "Внимание", "Выберите Excel файл с меню.")
+                return
+            
+            # Проверяем существование Excel файла
+            if not Path(excel_path).exists():
+                QMessageBox.warning(self, "Ошибка", "Указанный Excel файл не найден.")
+                return
+                
+            # Находим шаблон меню
+            template_path = default_template_path()
+            if not template_path or not Path(template_path).exists():
+                QMessageBox.warning(self, "Шаблон", "Шаблон меню не найден. Положите файл шаблона в папку templates/.")
+                return
+            
+            # Получаем дату для названия файла
+            from datetime import date
+            
+            # Создаём экземпляр класса заполнения шаблона
+            filler = MenuTemplateFiller()
+            
+            # Получаем дату из меню
+            menu_date = filler.extract_date_from_menu(excel_path)
+            
+            if menu_date:
+                date_str = menu_date.strftime("%d.%m.%Y")
+                suggested_name = f"шаблон_меню_{date_str}.xlsx"
+            else:
+                today_str = date.today().strftime("%d.%m.%Y")
+                suggested_name = f"шаблон_меню_{today_str}.xlsx"
+            
+            # Выбираем место сохранения заполненного шаблона
+            desktop = Path.home() / "Desktop"
+            suggested_path = str(desktop / suggested_name)
+            
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Сохранить заполненный шаблон меню",
+                suggested_path,
+                "Excel (*.xlsx);;Excel (*.xls);;Все файлы (*.*)"
+            )
+            
+            if not save_path:
+                return  # Пользователь отменил сохранение
+                
+            # Заполняем шаблон данными
+            success, message = filler.fill_menu_template(
+                template_path=template_path,
+                source_menu_path=excel_path,
+                output_path=save_path
+            )
+            
+            if success:
+                QMessageBox.information(self, "Готово", f"Шаблон меню заполнен и сохранён!\n{message}\nФайл: {Path(save_path).name}")
+            else:
+                QMessageBox.warning(self, "Ошибка", f"Не удалось заполнить шаблон:\n{message}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
 
 def main():
