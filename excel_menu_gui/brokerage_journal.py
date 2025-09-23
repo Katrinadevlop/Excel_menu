@@ -217,10 +217,10 @@ class BrokerageJournalGenerator:
         return dishes
     
     def extract_categorized_dishes(self, menu_path: str) -> Dict[str, List[str]]:
-        """Извлекает блюда из меню, распределяя по колонкам.
-        Столбец A (0) - завтраки, столбец E (4) - первые блюда, мясо, курица, рыба, гарниры
+        """Извлекает блюда из меню, распределяя по категориям:
+        завтраки, салаты и холодные закуски, первые блюда, блюда из мяса, блюда из птицы, блюда из рыбы, гарниры
         """
-        result: Dict[str, List[str]] = {k: [] for k in ['завтрак','салат','первое','мясо','курица','рыба','гарнир']}
+        result: Dict[str, List[str]] = {k: [] for k in ['завтрак','салат','первое','мясо','курица','птица','рыба','гарнир']}
         
         def add_from_dataframe(df: pd.DataFrame):
             print(f"\nОтладка: DataFrame имеет {len(df)} строк и {len(df.columns)} колонок")
@@ -271,7 +271,7 @@ class BrokerageJournalGenerator:
                             current_category = 'мясо'
                             print(f"Отладка: Найден заголовок МЯСО в колонке {col_idx}, строке {row_idx}")
                         elif 'БЛЮДА ИЗ ПТИЦЫ' in cell_str.upper():
-                            current_category = 'курица'
+                            current_category = 'птица'
                             print(f"Отладка: Найден заголовок ПТИЦА в колонке {col_idx}, строке {row_idx}")
                         elif 'БЛЮДА ИЗ РЫБЫ' in cell_str.upper():
                             current_category = 'рыба'
@@ -364,7 +364,7 @@ class BrokerageJournalGenerator:
                             current_category = 'мясо'
                             print(f"Отладка: Найден заголовок МЯСО в колонке {col_idx}, строке {row_idx}")
                         elif 'БЛЮДА ИЗ ПТИЦЫ' in cell_str.upper():
-                            current_category = 'курица'
+                            current_category = 'птица'
                             print(f"Отладка: Найден заголовок ПТИЦА в колонке {col_idx}, строке {row_idx}")
                         elif 'БЛЮДА ИЗ РЫБЫ' in cell_str.upper():
                             current_category = 'рыба'
@@ -602,6 +602,7 @@ class BrokerageJournalGenerator:
             right_list.extend(categories.get('первое', []))
             right_list.extend(categories.get('мясо', []))
             right_list.extend(categories.get('курица', []))
+            right_list.extend(categories.get('птица', []))
             right_list.extend(categories.get('рыба', []))
             right_list.extend(categories.get('гарнир', []))
             # Удаляем заголовки разделов

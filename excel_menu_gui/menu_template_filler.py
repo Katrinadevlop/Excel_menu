@@ -23,6 +23,7 @@ class MenuTemplateFiller:
             'первое': 'первые блюда',
             'мясо': 'блюда из мяса',
             'курица': 'блюда из курицы',
+            'птица': 'блюда из птицы',  # Добавляем птицу
             'рыба': 'блюда из рыбы',
             'гарнир': 'гарниры'
         }
@@ -41,7 +42,8 @@ class MenuTemplateFiller:
             'холодные закуски и салаты': ['салат', 'холодн', 'закуск'],
             'первые блюда': ['первые', 'первое', 'блюда'],
             'блюда из мяса': ['мясо', 'мясн'],
-            'блюда из курицы': ['курица', 'курин', 'птица'],
+            'блюда из курицы': ['курица', 'курин'],
+            'блюда из птицы': ['птица', 'птицы'],
             'блюда из рыбы': ['рыба', 'рыбн'],
             'гарниры': ['гарнир']
         }
@@ -73,7 +75,7 @@ class MenuTemplateFiller:
             if cell_val:
                 cell_text = str(cell_val).lower().strip()
                 # Пропускаем заголовки
-                if any(header in cell_text for header in ['блюда', 'завтрак', 'салат', 'мясо', 'курица', 'рыба', 'гарнир', 'первые']):
+                if any(header in cell_text for header in ['блюда', 'завтрак', 'салат', 'мясо', 'курица', 'птица', 'рыба', 'гарнир', 'первые']):
                     continue
                 # Пропускаем служебные строки
                 if any(skip in cell_text for skip in ['вес', 'цена', 'руб', 'изм']):
@@ -99,7 +101,7 @@ class MenuTemplateFiller:
         return [dish_name]
     
     def fill_template_column(self, ws, col: int, dishes: List[str], start_row: int) -> int:
-        """Заполняет колонку блюдами, начиная с указанной строки"""
+        """Заполляет колонку блюдами, начиная с указанной строки"""
         current_row = start_row
         filled_count = 0
         
@@ -111,11 +113,32 @@ class MenuTemplateFiller:
                 if current_row > ws.max_row:
                     break
                     
+                # Получаем ячейку
+                cell = ws.cell(row=current_row, column=col)
+                
+                # Проверяем, является ли ячейка объединенной
+                if hasattr(cell, 'coordinate'):
+                    # Проверяем, есть ли эта ячейка в списке объединенных ячеек
+                    is_merged = False
+                    for merged_range in ws.merged_cells.ranges:
+                        if cell.coordinate in merged_range:
+                            is_merged = True
+                            break
+                    
+                    # Пропускаем объединенные ячейки, кроме главной
+                    if is_merged and cell.__class__.__name__ == 'MergedCell':
+                        current_row += 1
+                        continue
+                
                 # Заполняем только пустые ячейки
-                current_val = ws.cell(row=current_row, column=col).value
+                current_val = cell.value
                 if not current_val or str(current_val).strip() == '':
-                    ws.cell(row=current_row, column=col, value=variant)
-                    filled_count += 1
+                    try:
+                        cell.value = variant
+                        filled_count += 1
+                    except AttributeError:
+                        # Если не можем записать в эту ячейку, пропускаем
+                        pass
                 
                 current_row += 1
         
@@ -136,7 +159,8 @@ class MenuTemplateFiller:
         # Ищем ячейки с датой в первых строках
         for row in range(1, min(6, ws.max_row + 1)):
             for col in range(1, min(5, ws.max_column + 1)):
-                cell_val = ws.cell(row=row, column=col).value
+                cell = ws.cell(row=row, column=col)
+                cell_val = cell.value
                 if cell_val:
                     cell_text = str(cell_val).lower()
                     # Если в ячейке есть упоминание месяца или это похоже на дату
@@ -148,8 +172,17 @@ class MenuTemplateFiller:
                             7: 'июля', 8: 'августа', 9: 'сентября', 10: 'октября', 11: 'ноября', 12: 'декабря'
                         }
                         date_str = f"{menu_date.day} {russian_months.get(menu_date.month, 'сентября')}"
-                        ws.cell(row=row, column=col, value=date_str)
-                        return
+                        
+                        # Проверяем, не является ли ячейка объединенной MergedCell
+                        if cell.__class__.__name__ == 'MergedCell':
+                            continue  # Пропускаем объединенные ячейки
+                        
+                        try:
+                            cell.value = date_str
+                            return
+                        except AttributeError:
+                            # Если не можем записать, продолжаем поиск
+                            continue
     
     def fill_menu_template(self, template_path: str, source_menu_path: str, output_path: str) -> Tuple[bool, str]:
         """
