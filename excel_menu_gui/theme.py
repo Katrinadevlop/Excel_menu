@@ -5,6 +5,7 @@ import winreg
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QPalette, QColor
 from PySide6.QtWidgets import QApplication
+from ui_styles import ThemeAwareStyles
 
 
 class ThemeMode(enum.Enum):
@@ -118,33 +119,9 @@ def apply_theme(app: QApplication, mode: ThemeMode) -> None:
     # Очищаем и заново устанавливаем stylesheet чтобы избежать смешения
     app.setStyleSheet("")
 
-    # Subtle style sheet for nicer group boxes and tooltips
-    if dark:
-        border = "#3a3a3a"
-        tooltip_border = "#5a5a5a"
-    else:
-        border = "#c0c0c0"
-        tooltip_border = "#a0a0a0"
-
-    app.setStyleSheet(f"""
-    QGroupBox {{
-        border: 1px solid {border};
-        border-radius: 6px;
-        margin-top: 10px;
-        padding-top: 6px;
-    }}
-    QGroupBox::title {{
-        subcontrol-origin: margin;
-        subcontrol-position: top left;
-        padding: 0 6px;
-        font-weight: bold;
-    }}
-    QToolTip {{
-        border: 1px solid {tooltip_border};
-        padding: 4px;
-        border-radius: 4px;
-    }}
-    """)
+    # Apply theme-aware styling using centralized styles
+    theme_stylesheet = ThemeAwareStyles.get_theme_stylesheet(dark)
+    app.setStyleSheet(theme_stylesheet)
 
 
 def start_system_theme_watcher(on_change: Callable[[bool], None], interval_ms: int = 1500) -> QTimer:

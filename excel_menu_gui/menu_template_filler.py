@@ -12,6 +12,8 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import re
 
+from dish_extractor import extract_categorized_dishes_from_menu, extract_date_from_menu
+
 
 class MenuTemplateFiller:
     """Заполняет шаблон меню данными из другого файла"""
@@ -30,10 +32,7 @@ class MenuTemplateFiller:
     
     def extract_categorized_dishes(self, menu_path: str) -> Dict[str, List[str]]:
         """Извлекает блюда по категориям из файла меню (используем уже готовую логику)"""
-        from brokerage_journal import BrokerageJournalGenerator
-        
-        generator = BrokerageJournalGenerator()
-        return generator.extract_categorized_dishes(menu_path)
+        return extract_categorized_dishes_from_menu(menu_path)
     
     def find_column_by_header(self, ws, header_text: str) -> Optional[int]:
         """Находит номер колонки по заголовку"""
@@ -146,10 +145,7 @@ class MenuTemplateFiller:
     
     def extract_date_from_menu(self, menu_path: str) -> Optional[datetime]:
         """Извлекает дату из файла меню (используем уже готовую логику)"""
-        from brokerage_journal import BrokerageJournalGenerator
-        
-        generator = BrokerageJournalGenerator()
-        return generator.extract_date_from_menu(menu_path)
+        return extract_date_from_menu(menu_path)
     
     def update_template_date(self, ws, menu_date: Optional[datetime]):
         """Обновляет дату в шаблоне"""

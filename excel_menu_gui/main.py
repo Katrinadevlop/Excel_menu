@@ -19,6 +19,10 @@ from theme import ThemeMode, apply_theme, start_system_theme_watcher
 from presentation_handler import create_presentation_with_excel_data
 from brokerage_journal import create_brokerage_journal_from_menu
 from menu_template_filler import MenuTemplateFiller
+from ui_styles import (
+    AppStyles, ButtonStyles, LayoutStyles, StyleSheets, ComponentStyles, 
+    StyleManager, ThemeAwareStyles
+)
 
 
 class DropLineEdit(QLineEdit):
@@ -45,9 +49,7 @@ class DropLineEdit(QLineEdit):
 
 def label_caption(text: str) -> QLabel:
     lbl = QLabel(text)
-    font = lbl.font()
-    font.setBold(True)
-    lbl.setFont(font)
+    ComponentStyles.style_caption_label(lbl)
     return lbl
 
 
@@ -83,37 +85,8 @@ class FileDropGroup(QGroupBox):
 
 
 def create_app_icon() -> QIcon:
-    size = 256
-    pix = QPixmap(size, size)
-    pix.fill(Qt.transparent)
-    p = QPainter(pix)
-    try:
-        p.setRenderHint(QPainter.Antialiasing, True)
-        # Фон — круг с градиентом (теплые оттенки)
-        grad = QLinearGradient(0, 0, size, size)
-        grad.setColorAt(0.0, QColor("#FF7E5F"))
-        grad.setColorAt(1.0, QColor("#FD3A69"))
-        p.setBrush(QBrush(grad))
-        p.setPen(Qt.NoPen)
-        margin = 12
-        p.drawEllipse(margin, margin, size - 2 * margin, size - 2 * margin)
-
-        # Светлая окантовка
-        p.setPen(QPen(QColor(255, 255, 255, 230), 6))
-        p.setBrush(Qt.NoBrush)
-        p.drawEllipse(margin + 3, margin + 3, size - 2 * (margin + 3), size - 2 * (margin + 3))
-
-        # Буква "М"
-        f = QFont()
-        f.setFamily("Segoe UI")
-        f.setBold(True)
-        f.setPointSize(120)
-        p.setFont(f)
-        p.setPen(QColor(255, 255, 255))
-        p.drawText(pix.rect(), Qt.AlignCenter, "М")
-    finally:
-        p.end()
-    return QIcon(pix)
+    """Legacy function for compatibility. Use AppStyles.create_app_icon() instead."""
+    return AppStyles.create_app_icon()
 
 
 def find_template(filename: str) -> Optional[str]:
@@ -141,20 +114,20 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Работа с меню")
-        self.setWindowIcon(create_app_icon())
-        self.resize(1000, 760)
+        # Apply centralized styling
+        StyleManager.setup_main_window(self)
 
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        LayoutStyles.apply_margins(root, LayoutStyles.DEFAULT_MARGINS)
+        root.setSpacing(AppStyles.DEFAULT_SPACING)
 
         # Панель управления (сверху)
         topBar = QFrame(); topBar.setObjectName("topBar")
         layTop = QHBoxLayout(topBar)
-        layTop.setContentsMargins(12, 8, 12, 8)
-        layTop.setSpacing(10)
+        LayoutStyles.apply_margins(layTop, LayoutStyles.TOPBAR_MARGINS)
+        layTop.setSpacing(AppStyles.DEFAULT_SPACING)
 
         lblTheme = QLabel("Тема:")
         self.cmbTheme = QComboBox()
@@ -179,73 +152,11 @@ class MainWindow(QMainWindow):
         layTop.addWidget(self.btnMakePresentation)
         layTop.addWidget(self.btnBrokerage)
 
-        # Небольшое оформление панели управления через стили
-        self.setStyleSheet(
-            """
-            #topBar {
-                border: 1px solid palette(Mid);
-                border-radius: 8px;
-                background: palette(Base);
-            }
-            #topBar QPushButton {
-                padding: 6px 12px;
-                font-size: 14px;
-                font-weight: 600;
-            }
-            #topBar QComboBox {
-                padding: 4px 8px;
-                min-width: 160px;
-                font-size: 14px;
-            }
-            #topBar QLabel {
-                font-weight: 600;
-            }
-            /* Кнопка после параметров — стиль как на панели управления */
-            #actionsPanel QPushButton {
-                padding: 6px 12px;
-                font-size: 14px;
-                font-weight: 600;
-            }
-            /* У группы параметров компактный стиль без рамки */
-            QGroupBox#paramsBox {
-                border: none;
-                margin: 0px;
-                padding: 0px;
-                font-weight: 600;
-            }
-            QGroupBox#paramsBox::title {
-                subcontrol-origin: content;
-                subcontrol-position: top left;
-                left: 0px;
-                top: -2px; /* поднимаем заголовок вплотную к контенту */
-                padding: 0px;
-                margin: 0px;
-            }
-            /* Компактные элементы внутри параметров без рамки */
-            #paramsFrame QCheckBox, #paramsFrame QLabel {
-                padding: 6px 2px;
-                margin: 4px 8px 4px 0px; /* увеличенные вертикальные и горизонтальные отступы */
-            }
-            #paramsFrame QCheckBox::indicator {
-                width: 14px;
-                height: 14px; /* квадратные галочки в параметрах */
-            }
-            #paramsFrame QSpinBox {
-                min-height: 20px;
-                padding: 2px 4px;
-            }
-            /* Убираем все отступы у контейнера параметров */
-            #paramsFrame {
-                border: none;
-                padding: 0px;
-                margin: 0px;
-            }
-            """
-        )
+        # Apply centralized stylesheet (already set in StyleManager.setup_main_window)
 
         self.topGroup = nice_group("Панель управления", topBar)
         self.topGroup.setObjectName("topGroup")
-        self.topGroup.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        LayoutStyles.apply_size_policy(self.topGroup, LayoutStyles.EXPANDING_FIXED)
         root.addWidget(self.topGroup)
 
         # Область прокрутки для остального содержимого, чтобы панель всегда была наверху
@@ -254,15 +165,15 @@ class MainWindow(QMainWindow):
         self.scrollArea.setFrameShape(QFrame.NoFrame)
         self.contentContainer = QWidget()
         self.contentLayout = QVBoxLayout(self.contentContainer)
-        self.contentLayout.setContentsMargins(0, 0, 0, 0)
-        self.contentLayout.setSpacing(8)  # фиксированный вертикальный интервал между компонентами
+        LayoutStyles.apply_margins(self.contentLayout, LayoutStyles.NO_MARGINS)
+        self.contentLayout.setSpacing(AppStyles.CONTENT_SPACING)  # фиксированный вертикальный интервал между компонентами
         self.scrollArea.setWidget(self.contentContainer)
         self.scrollArea.setAlignment(Qt.AlignTop)  # прижимаем контент к верху, если он ниже области
         root.addWidget(self.scrollArea, 1)
 
         # Excel файл для презентации (используем тот же стиль, что и для файлов сравнения)
         self.edExcelPath = DropLineEdit()
-        self.edExcelPath.setPlaceholderText("Выберите Excel файл с меню (салаты, первые блюда, мясо, птица, рыба, гарниры)...")
+        self.edExcelPath.setPlaceholderText("Выберите Excel файл с меню...")
         self.btnBrowseExcel = QPushButton("Обзор…")
         self.btnBrowseExcel.clicked.connect(lambda: self.browse_excel_file())
 
@@ -271,20 +182,19 @@ class MainWindow(QMainWindow):
         excel_layout.addWidget(self.btnBrowseExcel)
 
         excel_group = QWidget(); excel_group_layout = QVBoxLayout(excel_group)
-        excel_group_layout.addWidget(label_caption("Excel файл с меню (все категории)"))
+        excel_group_layout.addWidget(label_caption("Выберите Excel файл с меню..."))
         excel_group_layout.addWidget(excel_row)
         
-        self.grpExcelFile = FileDropGroup("Файл меню для презентации", self.edExcelPath, excel_group)
-        # Делаем такую же компактную высоту и отступы, как у панелей сравнения
-        self.grpExcelFile.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.grpExcelFile.setMinimumHeight(95)
+        self.grpExcelFile = FileDropGroup("Выберите Excel файл с меню для презентации...", self.edExcelPath, excel_group)
+        # Apply centralized styling for Excel file groups
+        ComponentStyles.style_excel_group(self.grpExcelFile)
         self.contentLayout.addWidget(self.grpExcelFile)
         self.grpExcelFile.setVisible(False)
         
         # Панель действий внизу для сравнения (фиксированная)
         self.actionsPanel = QWidget(); self.actionsPanel.setObjectName("actionsPanel")
         la = QHBoxLayout(self.actionsPanel)
-        la.setContentsMargins(0, 2, 0, 0)  # минимальный отступ сверху
+        LayoutStyles.apply_margins(la, LayoutStyles.MINIMAL_TOP_MARGIN)  # минимальный отступ сверху
         self.btnCompare = QPushButton("Сравнить и подсветить")
         self.btnCompare.clicked.connect(self.do_compare)
         la.addStretch(1)
@@ -295,7 +205,7 @@ class MainWindow(QMainWindow):
         # Панель действий внизу для презентаций (фиксированная)
         self.presentationActionsPanel = QWidget(); self.presentationActionsPanel.setObjectName("actionsPanel")
         pla = QHBoxLayout(self.presentationActionsPanel)
-        pla.setContentsMargins(0, 8, 0, 0)  # небольшой отступ сверху
+        LayoutStyles.apply_margins(pla, LayoutStyles.CONTENT_TOP_MARGIN)  # небольшой отступ сверху
         self.btnCreatePresentationWithData = QPushButton("Скачать презентацию с меню")
         self.btnCreatePresentationWithData.clicked.connect(self.do_create_presentation_with_data)
         pla.addStretch(1)
@@ -306,7 +216,7 @@ class MainWindow(QMainWindow):
         # Панель действий внизу для бракеражного журнала (фиксированная)
         self.brokerageActionsPanel = QWidget(); self.brokerageActionsPanel.setObjectName("actionsPanel")
         bla = QHBoxLayout(self.brokerageActionsPanel)
-        bla.setContentsMargins(0, 8, 0, 0)  # небольшой отступ сверху
+        LayoutStyles.apply_margins(bla, LayoutStyles.CONTENT_TOP_MARGIN)  # небольшой отступ сверху
         self.btnCreateBrokerageJournal = QPushButton("Скачать бракеражный журнал")
         self.btnCreateBrokerageJournal.clicked.connect(self.do_create_brokerage_journal_with_data)
         bla.addStretch(1)
@@ -317,7 +227,7 @@ class MainWindow(QMainWindow):
         # Панель действий внизу для шаблона меню (фиксированная)
         self.templateActionsPanel = QWidget(); self.templateActionsPanel.setObjectName("actionsPanel")
         tla = QHBoxLayout(self.templateActionsPanel)
-        tla.setContentsMargins(0, 8, 0, 0)  # небольшой отступ сверху
+        LayoutStyles.apply_margins(tla, LayoutStyles.CONTENT_TOP_MARGIN)  # небольшой отступ сверху
         self.btnFillTemplate = QPushButton("Заполнить и скачать шаблон меню")
         self.btnFillTemplate.clicked.connect(self.do_fill_template_with_data)
         tla.addStretch(1)
@@ -338,9 +248,8 @@ class MainWindow(QMainWindow):
         l1.addWidget(label_caption("Файл 1"))
         l1.addWidget(row1)
         self.grpFirst = FileDropGroup("Первый файл", self.edPath1, g1)
-        # Уменьшаем высоту панели сравнения
-        self.grpFirst.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.grpFirst.setMinimumHeight(45)
+        # Apply centralized styling for file groups
+        ComponentStyles.style_file_group(self.grpFirst)
         self.contentLayout.addWidget(self.grpFirst)
         self.grpFirst.setVisible(False)
 
@@ -357,16 +266,15 @@ class MainWindow(QMainWindow):
         l2.addWidget(label_caption("Файл 2"))
         l2.addWidget(row2)
         self.grpSecond = FileDropGroup("Второй файл", self.edPath2, g2)
-        # Уменьшаем высоту второй панели сравнения
-        self.grpSecond.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.grpSecond.setMinimumHeight(45)
+        # Apply centralized styling for file groups
+        ComponentStyles.style_file_group(self.grpSecond)
         self.contentLayout.addWidget(self.grpSecond)
         self.grpSecond.setVisible(False)
 
         # (дополнительно) — сворачиваемая группа
         opts = QWidget(); lo = QHBoxLayout(opts)
-        lo.setContentsMargins(0, 0, 0, 0)
-        lo.setSpacing(8)  # немного больше для удобства чтения
+        LayoutStyles.apply_margins(lo, LayoutStyles.NO_MARGINS)
+        lo.setSpacing(AppStyles.CONTENT_SPACING)  # немного больше для удобства чтения
         self.chkIgnoreCase = QCheckBox("Игнорировать регистр")
         self.chkIgnoreCase.setChecked(True)
         self.chkFuzzy = QCheckBox("Похожесть")
@@ -381,19 +289,15 @@ class MainWindow(QMainWindow):
         lo.addStretch(1)
 
         self.paramsBox = QGroupBox("Параметры (дополнительно)")
-        self.paramsBox.setObjectName("paramsBox")
-        self.paramsBox.setCheckable(True)
-        self.paramsBox.setChecked(False)
-        # Устанавливаем увеличенную высоту для панели параметров
-        self.paramsBox.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.paramsBox.setMaximumHeight(55)
+        # Apply centralized styling for parameter groups
+        ComponentStyles.style_params_group(self.paramsBox)
         lparams = QVBoxLayout(self.paramsBox)
         lparams.setContentsMargins(0, 10, 0, 0)  # полностью убираем отступы
-        lparams.setSpacing(8)  # добавляем промежуток между заголовком и содержимым
+        lparams.setSpacing(AppStyles.CONTENT_SPACING)  # добавляем промежуток между заголовком и содержимым
         # Контейнер параметров без дополнительной рамки
         self._paramsFrame = QFrame(); self._paramsFrame.setObjectName("paramsFrame")
         lf = QHBoxLayout(self._paramsFrame)
-        lf.setContentsMargins(0, 0, 0, 0)  # убираем отступы
+        LayoutStyles.apply_margins(lf, LayoutStyles.NO_MARGINS)  # убираем отступы
         lf.setSpacing(0)
         lf.addWidget(opts)
         lparams.addWidget(self._paramsFrame)
