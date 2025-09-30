@@ -436,7 +436,7 @@ class MainWindow(QMainWindow):
                     ignore_case=self.chkIgnoreCase.isChecked(),
                     use_fuzzy=self.chkFuzzy.isChecked(),
                     fuzzy_threshold=int(self.spinFuzzy.value()),
-                    final_choice=2,
+                    final_choice=0,  # авто: финальным будет файл с более поздней датой
                 )
                 
                 # Перемещаем файл в выбранное место
