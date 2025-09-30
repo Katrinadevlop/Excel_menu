@@ -463,17 +463,19 @@ def compare_and_highlight(
     ref_ranges = _find_category_ranges(ref_vals, synonyms_map)
     final_ranges = _find_category_ranges(final_vals, synonyms_map)
 
-    # Если категории не обнаружены — fallback к старой логике одной колонки
+    # Если категории не обнаружены — fallback к логике сравнения по двум столбцам глобально
     if not ref_ranges or not final_ranges:
-        # load reference set по прежней колонке (col2 как ref, кол1 как final), используя входные col1/col2
-        ref_idx = col_to_index0(col2)
+        # Собираем референсный набор блюд из обоих столбцов (col1 и col2) целиком по листу
+        ref_cols = sorted(set([col1, col2]))
         ref_set: Set[str] = set()
-        for r in range(max(0, header_row2), len(ref_vals)):
-            row = ref_vals[r] if r < len(ref_vals) else []
-            v = row[ref_idx] if ref_idx < len(row) else None
-            name = normalize_dish(v, ignore_case)
-            if name:
-                ref_set.add(name)
+        for c_letter in ref_cols:
+            c_idx = col_to_index0(c_letter)
+            for r in range(max(0, header_row2), len(ref_vals)):
+                row = ref_vals[r] if r < len(ref_vals) else []
+                v = row[c_idx] if c_idx < len(row) else None
+                name = normalize_dish(v, ignore_case)
+                if name:
+                    ref_set.add(name)
 
         def is_match_fallback(dish: str) -> bool:
             if not use_fuzzy:
@@ -489,15 +491,23 @@ def compare_and_highlight(
 
         from openpyxl.styles import Font
         red_font = Font(color="FF0000")
-        idx_final = col_to_index0(col1)
+        idx_a = col_to_index0('A')
+        idx_e = col_to_index0('E')
         matches = 0
         for r in range(1, sh.max_row + 1):
             if r <= max(1, header_row1):
                 continue
-            cell = sh.cell(row=r, column=idx_final + 1)
-            text = normalize_dish(str(cell.value) if cell.value is not None else '', ignore_case)
-            if text and is_match_fallback(text):
-                cell.font = red_font
+            # Проверяем столбец A
+            cell_a = sh.cell(row=r, column=idx_a + 1)
+            text_a = normalize_dish(str(cell_a.value) if cell_a.value is not None else '', ignore_case)
+            if text_a and is_match_fallback(text_a):
+                cell_a.font = red_font
+                matches += 1
+            # Проверяем столбец E
+            cell_e = sh.cell(row=r, column=idx_e + 1)
+            text_e = normalize_dish(str(cell_e.value) if cell_e.value is not None else '', ignore_case)
+            if text_e and is_match_fallback(text_e):
+                cell_e.font = red_font
                 matches += 1
         # Дата используется только в названии файла, не добавляем её в содержимое
         out_path = make_final_output_path(final_xlsx, latest_date)
@@ -512,12 +522,24 @@ def compare_and_highlight(
         items = _extract_dishes_from_both_columns(ref_vals, start, end, ignore_case)
         ref_sets[cat] = items
 
+    # Также сформируем глобальный набор блюд из референса (оба столбца, весь лист)
+    ref_global_set: Set[str] = _extract_dishes_from_both_columns(ref_vals, 1, len(ref_vals), ignore_case)
+
     def is_match_cat(cat: str, dish: str) -> bool:
+        # Сначала пробуем совпадение в пределах категории, затем глобально по всему листу
         sset = ref_sets.get(cat, set())
         if not use_fuzzy:
-            return dish in sset
+            return (dish in sset) or (dish in ref_global_set)
         best = 0
+        # Проверяем категорию
         for s in sset:
+            sim = sim_percent(dish, s)
+            if sim > best:
+                best = sim
+            if best >= fuzzy_threshold:
+                return True
+        # Проверяем глобальный набор
+        for s in ref_global_set:
             sim = sim_percent(dish, s)
             if sim > best:
                 best = sim
