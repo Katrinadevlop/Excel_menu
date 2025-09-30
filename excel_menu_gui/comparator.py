@@ -430,11 +430,19 @@ def _extract_dates_from_text(s: str) -> List[date]:
         except ValueError:
             pass
 
-    # dd.mm or dd-mm (assume current year)
+    # dd.mm or dd-mm (assume nearest year to today if year is missing)
     for m in re.finditer(r"\b(\d{1,2})[./\-](\d{1,2})(?![./\-]\d)\b", s_norm):
         d, mth = int(m.group(1)), int(m.group(2))
         try:
-            out.append(date(today.year, mth, d))
+            cand = date(today.year, mth, d)
+            delta = (cand - today).days
+            if delta > 183:
+                # слишком далеко в будущем — считаем, что это прошедший год
+                cand = date(today.year - 1, mth, d)
+            elif delta < -183:
+                # слишком далеко в прошлом — считаем, что это следующий год
+                cand = date(today.year + 1, mth, d)
+            out.append(cand)
         except ValueError:
             pass
 
@@ -461,11 +469,24 @@ def _extract_dates_from_text(s: str) -> List[date]:
         mon_str = mon_str.replace('ё', 'е')
         if mon_str in months:
             mth = months[mon_str]
-            y = int(y_str) if y_str else today.year
-            try:
-                out.append(date(y, mth, d))
-            except ValueError:
-                pass
+            if y_str:
+                y = int(y_str)
+                try:
+                    out.append(date(y, mth, d))
+                except ValueError:
+                    pass
+            else:
+                # Без года — выберем ближайший к сегодня год
+                try:
+                    cand = date(today.year, mth, d)
+                    delta = (cand - today).days
+                    if delta > 183:
+                        cand = date(today.year - 1, mth, d)
+                    elif delta < -183:
+                        cand = date(today.year + 1, mth, d)
+                    out.append(cand)
+                except ValueError:
+                    pass
 
     # De-duplicate
     uniq = []
@@ -768,8 +789,7 @@ def compare_and_highlight(
             if text_d.strip() and is_match_fallback(text_d):
                 cell_d.font = red_font
                 matches += 1
-        # Добавляем заголовок с датой и сохраняем с корректной датой
-        _add_date_info_to_worksheet(sh, display_date)
+        # Сохраняем файл с корректной датой в имени (без изменения содержимого)
         out_path = make_final_output_path(final_xlsx, display_date)
         wb.save(out_path)
         wb.close()
@@ -886,8 +906,7 @@ def compare_and_highlight(
             except:
                 continue
 
-    # Добавляем заголовок с датой и сохраняем с корректной датой
-    _add_date_info_to_worksheet(sh, display_date)
+    # Сохраняем файл с корректной датой в имени (без изменения содержимого)
     out_path = make_final_output_path(final_xlsx, display_date)
     wb.save(out_path)
     wb.close()
