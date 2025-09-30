@@ -5,8 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="187e6e65-539b-4810-a0f8-8fbe6fab9386" name="Changes" comment="Изменены отступы в вкладке сранения меню, в дополнительных параметрах, также налажена навигация между страницами">
-      <change beforePath="$PROJECT_DIR$/dish_extractor.py" beforeDir="false" afterPath="$PROJECT_DIR$/dish_extractor.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ui_styles.py" beforeDir="false" afterPath="$PROJECT_DIR$/ui_styles.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/comparator.py" beforeDir="false" afterPath="$PROJECT_DIR$/comparator.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

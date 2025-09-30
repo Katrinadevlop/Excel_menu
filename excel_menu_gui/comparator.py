@@ -349,6 +349,32 @@ def _choose_column_for_block(values: List[List[Optional[str]]], start: int, end:
     return 'A' if a_cnt >= e_cnt else 'E'
 
 
+def _extract_dishes_from_both_columns(values: List[List[Optional[str]]], start: int, end: int, ignore_case: bool) -> Set[str]:
+    """Извлекает блюда из столбцов A и E для указанного диапазона строк.
+    start/end 1-базисные.
+    """
+    dishes = set()
+    a_idx = col_to_index0('A')
+    e_idx = col_to_index0('E')
+    
+    for r in range(start, end + 1):
+        row = values[r - 1] if r - 1 < len(values) else []
+        
+        # Проверяем столбец A
+        v_a = row[a_idx] if a_idx < len(row) else None
+        name_a = normalize_dish(v_a, ignore_case)
+        if name_a:
+            dishes.add(name_a)
+        
+        # Проверяем столбец E
+        v_e = row[e_idx] if e_idx < len(row) else None
+        name_e = normalize_dish(v_e, ignore_case)
+        if name_e:
+            dishes.add(name_e)
+            
+    return dishes
+
+
 def compare_and_highlight(
     path1: str,
     sheet1: str,
@@ -479,20 +505,11 @@ def compare_and_highlight(
         wb.close()
         return out_path, matches
 
-    # Построим множества по категориям из ref, выбирая колонку A или E по заполненности блока
+    # Построим множества по категориям из ref, извлекая блюда из столбцов A и E одновременно
     ref_sets: dict = {}
-    ref_cols_used: dict = {}
     for cat, (start, end) in ref_ranges.items():
-        col_letter = _choose_column_for_block(ref_vals, start, end)
-        ref_cols_used[cat] = col_letter
-        idx = col_to_index0(col_letter)
-        items: Set[str] = set()
-        for r in range(start, min(end, len(ref_vals)) + 1):
-            row = ref_vals[r - 1] if r - 1 < len(ref_vals) else []
-            v = row[idx] if idx < len(row) else None
-            name = normalize_dish(v, ignore_case)
-            if name:
-                items.add(name)
+        # Извлекаем блюда из обоих столбцов (A и E)
+        items = _extract_dishes_from_both_columns(ref_vals, start, end, ignore_case)
         ref_sets[cat] = items
 
     def is_match_cat(cat: str, dish: str) -> bool:
@@ -513,14 +530,23 @@ def compare_and_highlight(
 
     matches = 0
     for cat, (start, end) in final_ranges.items():
-        # Используем ту же колонку, что и в ref, если она была определена, иначе выберем по заполненности в final
-        col_letter = ref_cols_used.get(cat) or _choose_column_for_block(final_vals, start, end)
-        idx = col_to_index0(col_letter)
+        # Проверяем оба столбца A и E
+        a_idx = col_to_index0('A')
+        e_idx = col_to_index0('E')
+        
         for r in range(start, min(end, sh.max_row) + 1):
-            cell = sh.cell(row=r, column=idx + 1)
-            text = normalize_dish(str(cell.value) if cell.value is not None else '', ignore_case)
-            if text and is_match_cat(cat, text):
-                cell.font = red_font
+            # Проверяем столбец A
+            cell_a = sh.cell(row=r, column=a_idx + 1)
+            text_a = normalize_dish(str(cell_a.value) if cell_a.value is not None else '', ignore_case)
+            if text_a and is_match_cat(cat, text_a):
+                cell_a.font = red_font
+                matches += 1
+            
+            # Проверяем столбец E
+            cell_e = sh.cell(row=r, column=e_idx + 1)
+            text_e = normalize_dish(str(cell_e.value) if cell_e.value is not None else '', ignore_case)
+            if text_e and is_match_cat(cat, text_e):
+                cell_e.font = red_font
                 matches += 1
 
     # Дата используется только в названии файла, не добавляем её в содержимое
