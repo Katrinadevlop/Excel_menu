@@ -13,7 +13,12 @@ from typing import Dict, Any, Optional
 
 
 class AppStyles:
-    """Main application styling constants and presets."""
+    """Основные константы стилей приложения и пресеты.
+    
+    Содержит все основные параметры внешнего вида приложения:
+    размеры окон, отступы, шрифты, цвета и размеры компонентов.
+    Все значения централизованы для обеспечения консистентности.
+    """
     
     # === WINDOW SETTINGS ===
     WINDOW_DEFAULT_SIZE = (1000, 760)
@@ -54,7 +59,17 @@ class AppStyles:
     
     @classmethod
     def create_app_icon(cls) -> QIcon:
-        """Creates the application icon with gradient background."""
+        """Создает иконку приложения с градиентным фоном.
+        
+        Создает круглую иконку с градиентом от оранжевого к розовому,
+        светлой каймой и буквой "М" по центру.
+        
+        Returns:
+            QIcon: Готовая иконка приложения размером 256x256 пикселей
+            
+        Note:
+            Требует инициализированного QGuiApplication для создания QPixmap
+        """
         size = cls.WINDOW_ICON_SIZE
         pix = QPixmap(size, size)
         pix.fill(Qt.transparent)
@@ -90,7 +105,12 @@ class AppStyles:
 
 
 class ButtonStyles:
-    """Button styling presets and utilities."""
+    """Пресеты стилей кнопок и утилиты для их применения.
+    
+    Содержит предустановленные стили для различных типов кнопок:
+    кнопки панели инструментов, кнопки обзора, кнопки действий.
+    Предоставляет утилиты для применения стилей к кнопкам.
+    """
     
     # === BUTTON PADDING ===
     DEFAULT_PADDING = "6px 12px"
@@ -118,7 +138,16 @@ class ButtonStyles:
     
     @classmethod
     def apply_button_style(cls, button, style_preset: Dict[str, Any]) -> None:
-        """Apply a button style preset to a QPushButton."""
+        """Применяет пресет стилей к кнопке QPushButton.
+        
+        Args:
+            button: Кнопка QPushButton для стилизации
+            style_preset: Словарь со CSS-свойствами и их значениями
+                         Например: {"padding": "6px 12px", "color": "white"}
+        
+        Note:
+            CSS-свойства применяются как stylesheet к кнопке
+        """
         if hasattr(button, 'setStyleSheet'):
             css_rules = []
             for prop, value in style_preset.items():
@@ -129,7 +158,11 @@ class ButtonStyles:
 
 
 class LayoutStyles:
-    """Layout and container styling constants."""
+    """Константы стилей макетов и контейнеров.
+    
+    Предоставляет предустановленные значения отступов, размерных политик
+    и утилиты для их применения к макетам и виджетам.
+    """
     
     # === LAYOUT MARGINS ===
     NO_MARGINS = (0, 0, 0, 0)
@@ -145,23 +178,44 @@ class LayoutStyles:
     
     @classmethod
     def apply_margins(cls, layout, margins_preset) -> None:
-        """Apply margin preset to a layout."""
+        """Применяет пресет отступов к макету.
+        
+        Args:
+            layout: Макет для применения отступов (должен иметь метод setContentsMargins)
+            margins_preset: Кортеж с отступами (left, top, right, bottom)
+        """
         if hasattr(layout, 'setContentsMargins'):
             layout.setContentsMargins(*margins_preset)
     
     @classmethod
     def apply_size_policy(cls, widget, policy_preset) -> None:
-        """Apply size policy preset to a widget."""
+        """Применяет пресет размерной политики к виджету.
+        
+        Args:
+            widget: Виджет для применения политики (должен иметь метод setSizePolicy)
+            policy_preset: Кортеж с политиками (horizontal_policy, vertical_policy)
+        """
         if hasattr(widget, 'setSizePolicy'):
             widget.setSizePolicy(*policy_preset)
 
 
 class StyleSheets:
-    """Centralized stylesheet definitions."""
+    """Централизованные определения таблиц стилей.
+    
+    Генерирует CSS-стили для различных частей приложения,
+    используя константы из других классов стилей.
+    """
     
     @classmethod
     def get_main_stylesheet(cls) -> str:
-        """Returns the main application stylesheet."""
+        """Возвращает основную таблицу стилей приложения.
+        
+        Генерирует CSS для панели управления, кнопок действий,
+        групп параметров и других основных элементов интерфейса.
+        
+        Returns:
+            str: CSS-код основных стилей приложения
+        """
         return f"""
             #topBar {{
                 border: 1px solid palette(Mid);
@@ -225,11 +279,20 @@ class StyleSheets:
 
 
 class ComponentStyles:
-    """Individual component styling utilities."""
+    """Утилиты стилизации отдельных компонентов.
+    
+    Предоставляет функции для применения стандартных стилей
+    к различным элементам интерфейса: меткам, группам файлов,
+    параметрическим группам и другим компонентам.
+    """
     
     @classmethod
     def style_caption_label(cls, label) -> None:
-        """Apply bold font styling to caption labels."""
+        """Применяет жирное начертание шрифта к меткам-заголовкам.
+        
+        Args:
+            label: QLabel для стилизации (должен иметь методы font() и setFont())
+        """
         if hasattr(label, 'font') and hasattr(label, 'setFont'):
             font = label.font()
             font.setBold(AppStyles.CAPTION_FONT_WEIGHT)
@@ -237,19 +300,40 @@ class ComponentStyles:
     
     @classmethod
     def style_file_group(cls, group_box) -> None:
-        """Apply standard styling to file selection groups."""
+        """Применяет стандартную стилизацию к группам выбора файлов.
+        
+        Устанавливает размерную политику и минимальную высоту
+        для групп выбора файлов в интерфейсе сравнения.
+        
+        Args:
+            group_box: QGroupBox для стилизации
+        """
         LayoutStyles.apply_size_policy(group_box, LayoutStyles.EXPANDING_FIXED)
         group_box.setMinimumHeight(AppStyles.FILE_GROUP_MIN_HEIGHT)
     
     @classmethod
     def style_excel_group(cls, group_box) -> None:
-        """Apply styling to Excel file selection groups."""
+        """Применяет стилизацию к группам выбора Excel-файлов.
+        
+        Устанавливает размерную политику и увеличенную минимальную высоту
+        для групп выбора Excel-файлов (выше чем обычные группы файлов).
+        
+        Args:
+            group_box: QGroupBox для стилизации
+        """
         LayoutStyles.apply_size_policy(group_box, LayoutStyles.EXPANDING_FIXED)
         group_box.setMinimumHeight(AppStyles.EXCEL_GROUP_MIN_HEIGHT)
     
     @classmethod
     def style_params_group(cls, group_box) -> None:
-        """Apply styling to parameter groups."""
+        """Применяет стилизацию к группам параметров.
+        
+        Настраивает группу как сворачиваемую, устанавливает идентификатор,
+        размерную политику и максимальную высоту для компактного отображения.
+        
+        Args:
+            group_box: QGroupBox для стилизации как группы параметров
+        """
         group_box.setObjectName("paramsBox")
         group_box.setCheckable(True)
         group_box.setChecked(False)
@@ -258,21 +342,49 @@ class ComponentStyles:
 
 
 class ThemeAwareStyles:
-    """Theme-aware styling that adapts to light/dark themes."""
+    """Стили, адаптирующиеся к светлой/темной теме.
+    
+    Предоставляет функции для получения цветов и стилей,
+    которые автоматически адаптируются к текущей теме интерфейса.
+    """
     
     @classmethod
     def get_border_color(cls, is_dark: bool) -> str:
-        """Get appropriate border color for current theme."""
+        """Возвращает подходящий цвет границы для текущей темы.
+        
+        Args:
+            is_dark: True для темной темы, False для светлой
+            
+        Returns:
+            str: Hex-код цвета границы (#3a3a3a для темной, #c0c0c0 для светлой)
+        """
         return "#3a3a3a" if is_dark else "#c0c0c0"
     
     @classmethod
     def get_tooltip_border_color(cls, is_dark: bool) -> str:
-        """Get appropriate tooltip border color for current theme."""
+        """Возвращает подходящий цвет границы подсказок для текущей темы.
+        
+        Args:
+            is_dark: True для темной темы, False для светлой
+            
+        Returns:
+            str: Hex-код цвета границы подсказок (#5a5a5a для темной, #a0a0a0 для светлой)
+        """
         return "#5a5a5a" if is_dark else "#a0a0a0"
     
     @classmethod
     def get_theme_stylesheet(cls, is_dark: bool) -> str:
-        """Get theme-specific stylesheet additions."""
+        """Возвращает тематические дополнения к таблице стилей.
+        
+        Генерирует CSS для элементов, которые должны адаптироваться
+        к текущей теме: границы групп, подсказки и другие элементы.
+        
+        Args:
+            is_dark: True для темной темы, False для светлой
+            
+        Returns:
+            str: CSS-код тематических стилей
+        """
         border = cls.get_border_color(is_dark)
         tooltip_border = cls.get_tooltip_border_color(is_dark)
         
@@ -298,11 +410,22 @@ class ThemeAwareStyles:
 
 
 class StyleManager:
-    """Main style management utility class."""
+    """Основной класс управления стилями.
+    
+    Предоставляет высокоуровневые функции для стилизации окон и кнопок.
+    Объединяет функциональность других классов стилей в удобном API.
+    """
     
     @classmethod
     def setup_main_window(cls, window) -> None:
-        """Apply all styling to the main window."""
+        """Применяет всю стилизацию к главному окну.
+        
+        Устанавливает иконку приложения, размер окна и основную таблицу стилей.
+        Это основная функция для инициализации стилей главного окна.
+        
+        Args:
+            window: QMainWindow для стилизации
+        """
         # Set window properties
         if hasattr(window, 'setWindowIcon'):
             window.setWindowIcon(AppStyles.create_app_icon())
@@ -316,15 +439,27 @@ class StyleManager:
     
     @classmethod
     def style_toolbar_button(cls, button) -> None:
-        """Apply toolbar button styling."""
+        """Применяет стиль кнопки панели инструментов.
+        
+        Args:
+            button: QPushButton для стилизации как кнопка панели инструментов
+        """
         ButtonStyles.apply_button_style(button, ButtonStyles.TOOLBAR_BUTTON)
     
     @classmethod
     def style_action_button(cls, button) -> None:
-        """Apply action button styling."""
+        """Применяет стиль кнопки действия.
+        
+        Args:
+            button: QPushButton для стилизации как кнопка действия
+        """
         ButtonStyles.apply_button_style(button, ButtonStyles.ACTION_BUTTON)
     
     @classmethod
     def style_browse_button(cls, button) -> None:
-        """Apply browse button styling."""
+        """Применяет стиль кнопки обзора файлов.
+        
+        Args:
+            button: QPushButton для стилизации как кнопка обзора
+        """
         ButtonStyles.apply_button_style(button, ButtonStyles.BROWSE_BUTTON)

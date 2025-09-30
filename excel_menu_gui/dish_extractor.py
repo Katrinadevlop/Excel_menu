@@ -35,7 +35,18 @@ class SheetNotFoundError(DishExtractionError):
 # Модели данных
 @dataclass
 class DishItem:
-    """Элемент блюда с базовой информацией"""
+    """Представляет отдельное блюдо с базовой информацией.
+    
+    Данный класс содержит основную информацию о блюде:
+    название, вес, цену и категорию. Автоматически очищает
+    и нормализует данные при создании объекта.
+    
+    Attributes:
+        name (str): Название блюда
+        weight (str): Вес или порция блюда (например, "150г", "1 шт")
+        price (str): Цена блюда (например, "120 руб")
+        category (str): Категория блюда (завтрак, салат, первое, мясо, курица, рыба, гарнир)
+    """
     name: str
     weight: str = ""
     price: str = ""
@@ -51,7 +62,17 @@ class DishItem:
 
 @dataclass
 class ExtractionResult:
-    """Результат извлечения блюд"""
+    """Результат извлечения блюд с метаданными.
+    
+    Содержит результаты извлечения блюд из источника данных,
+    включая общий список, группировку по категориям и дополнительную информацию.
+    
+    Attributes:
+        dishes (List[DishItem]): Список всех извлеченных блюд
+        categories (Dict[str, List[DishItem]]): Блюда, сгруппированные по категориям
+        source_date (Optional[datetime]): Дата, найденная в источнике данных
+        total_count (int): Общее количество блюд (вычисляется автоматически)
+    """
     dishes: List[DishItem]
     categories: Dict[str, List[DishItem]]
     source_date: Optional[datetime] = None
@@ -63,21 +84,49 @@ class ExtractionResult:
 
 # Абстракция для источников данных
 class DataSource(ABC):
-    """Абстрактный источник данных для извлечения блюд"""
+    """Абстрактный базовый класс для источников данных о блюдах.
+    
+    Определяет интерфейс для всех типов источников данных (Excel, CSV, базы данных).
+    Наследники должны реализовать методы для извлечения блюд и дат.
+    """
     
     @abstractmethod
     def extract_dishes(self, source_path: str, **kwargs) -> ExtractionResult:
-        """Извлекает блюда из источника данных"""
+        """Извлекает блюда из источника данных.
+        
+        Args:
+            source_path: Путь к источнику данных
+            **kwargs: Дополнительные параметры извлечения
+            
+        Returns:
+            ExtractionResult: Результат извлечения с блюдами и метаданными
+            
+        Raises:
+            DishExtractionError: При ошибках извлечения данных
+        """
         pass
     
     @abstractmethod
     def extract_date(self, source_path: str, **kwargs) -> Optional[datetime]:
-        """Извлекает дату из источника данных"""
+        """Извлекает дату из источника данных.
+        
+        Args:
+            source_path: Путь к источнику данных
+            **kwargs: Дополнительные параметры извлечения
+            
+        Returns:
+            Optional[datetime]: Найденная дата или None
+        """
         pass
 
 
 class ExcelDataSource(DataSource):
-    """Источник данных Excel файлов"""
+    """Источник данных для работы с Excel файлами меню.
+    
+    Обрабатывает файлы форматов .xls, .xlsx, .xlsm.
+    Извлекает блюда по категориям и находит даты в содержимом файлов.
+    Поддерживает различные структуры Excel-документов.
+    """
     
     def __init__(self):
         self.categories_mapping = {
