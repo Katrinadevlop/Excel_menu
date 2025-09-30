@@ -2,7 +2,7 @@
 import os
 import re
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Tuple, Optional, Set
 
@@ -64,13 +64,226 @@ def normalize_dish(s: Optional[str], ignore_case: bool) -> str:
     s = normalize(s, ignore_case)
     if not s:
         return ''
+    # Убираем числовые данные в скобках (калории, граммы, цены)
     s = re.sub(r"\((?:[^)]*?\d\s*(?:к?кал|ккал|г|гр|грамм(?:а|ов)?|мл|л|кг|руб\.?|р\.?|₽)[^)]*?)\)", "", s, flags=re.IGNORECASE)
+    # Убираем числовые данные без скобок
     s = re.sub(r"\b\d+[\.,]?\d*\s*(?:к?кал|ккал|г|гр|грамм(?:а|ов)?|мл|л|кг)\b\.?", "", s, flags=re.IGNORECASE)
     s = re.sub(r"\b\d+[\.,]?\d*\s*(?:руб\.?|р\.?|₽)\b\.?", "", s, flags=re.IGNORECASE)
     s = re.sub(r"(?:₽|руб\.?|р\.?)\s*\d+[\.,]?\d*", "", s, flags=re.IGNORECASE)
+    # Нормализуем варианты приготовления: убираем /вариант и оставляем основное блюдо
+    # Например: "яйцо отварное/жареное" -> "яйцо отварное", "яйцо жареное" 
     s = re.sub(r"[\s,;:.-]+$", "", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
+
+
+def normalize_dish_with_variants(s: Optional[str], ignore_case: bool) -> List[str]:
+    """
+    Нормализует название блюда и возвращает все возможные варианты.
+    Например: "Яйцо отварное/жареное" -> ["яйцо отварное", "яйцо жареное"]
+    "Сосиска с сыром/с беконом" -> ["сосиска с сыром", "сосиска с беконом"]
+    """
+    base = normalize_dish(s, ignore_case)
+    if not base:
+        return []
+    
+    # Если нет слэша, возвращаем исходное блюдо
+    if '/' not in base:
+        return [base]
+    
+    # Разбиваем по слэшам для обработки множественных вариантов
+    parts = [part.strip() for part in base.split('/')]
+    if len(parts) < 2:
+        return [base]
+    
+    variants = []
+    
+    # Определяем общий префикс и суффикс
+    # Ищем самое длинное общее начало и конец всех частей
+    def find_common_prefix(strings):
+        if not strings:
+            return ""
+        prefix = strings[0]
+        for s in strings[1:]:
+            while prefix and not s.startswith(prefix):
+                prefix = prefix[:-1]
+        return prefix
+    
+    def find_common_suffix(strings):
+        if not strings:
+            return ""
+        suffix = strings[0]
+        for s in strings[1:]:
+            while suffix and not s.endswith(suffix):
+                suffix = suffix[1:]
+        return suffix
+    
+    # Пытаемся найти структуру "префикс вариант1/вариант2 суффикс"
+    # Сначала попробуем найти общие слова в начале и конце
+    words = [part.split() for part in parts]
+    
+    # Простой подход: ищем паттерны
+    found_pattern = False
+    
+    # Специальные случаи для повторяющихся предлогов
+    
+    # Паттерн: "с сыром/с беконом" или "по цене/по вкусу"
+    pattern_with_prep = re.search(r'^(\S+\s+.+)/(\S+\s+.+)$', base.strip())
+    if pattern_with_prep:
+        part1 = pattern_with_prep.group(1).strip()
+        part2 = pattern_with_prep.group(2).strip()
+        
+        # Проверяем, есть ли общий предлог (первое слово)
+        part1_words = part1.split()
+        part2_words = part2.split()
+        
+        if (len(part1_words) >= 2 and len(part2_words) >= 2 and 
+            part1_words[0] == part2_words[0] and  # одинаковые предлоги
+            part1_words[0] in ['с', 'по', 'для', 'от', 'на']):  # известные предлоги
+            # Нашли повторяющиеся предлоги, пока просто возвращаем как есть
+            variants = [part1, part2]
+            found_pattern = True
+        elif len(parts) == 2:
+            # Проверяем общую основу для случаев типа "яйцо отварное/жареное"
+            # Находим общие слова в начале
+            words1 = part1.split()
+            words2 = part2.split()
+            
+            # Находим общие префиксы
+            common_prefix = []
+            min_len = min(len(words1), len(words2))
+            for i in range(min_len):
+                if words1[i] == words2[i]:
+                    common_prefix.append(words1[i])
+                else:
+                    break
+            
+            # Находим общие суффиксы
+            common_suffix = []
+            for i in range(1, min_len + 1):
+                if len(words1) >= i and len(words2) >= i and words1[-i] == words2[-i]:
+                    common_suffix.insert(0, words1[-i])
+                else:
+                    break
+            
+            if common_prefix or common_suffix:
+                prefix_str = ' '.join(common_prefix) if common_prefix else ''
+                suffix_str = ' '.join(common_suffix) if common_suffix else ''
+                
+                # Создаем варианты
+                for part in [part1, part2]:
+                    words = part.split()
+                    start_idx = len(common_prefix)
+                    end_idx = len(words) - len(common_suffix) if common_suffix else len(words)
+                    middle_words = words[start_idx:end_idx] if start_idx < end_idx else []
+                    
+                    variant_parts = []
+                    if prefix_str:
+                        variant_parts.append(prefix_str)
+                    if middle_words:
+                        variant_parts.append(' '.join(middle_words))
+                    if suffix_str:
+                        variant_parts.append(suffix_str)
+                    
+                    variant = ' '.join(variant_parts).strip()
+                    if variant:
+                        variants.append(variant)
+                
+                if variants:
+                    found_pattern = True
+    
+    # Паттерн 1: "слово1 слово2 вариант1/вариант2" 
+    if not found_pattern:
+        for i in range(len(parts)):
+            current_words = parts[i].split()
+            if len(current_words) > 1:
+                # Проверяем, можно ли объединить с другими частями
+                base_part = ' '.join(current_words[:-1])  # все кроме последнего слова
+                variant_word = current_words[-1]  # последнее слово
+                
+                # Строим варианты, заменяя части после слэша
+                temp_variants = []
+                for j, part in enumerate(parts):
+                    if j == i:
+                        temp_variants.append(f"{base_part} {variant_word}")
+                    else:
+                        # Пытаемся найти соответствующую часть
+                        other_words = part.split()
+                        if len(other_words) >= 1:
+                            temp_variants.append(f"{base_part} {' '.join(other_words)}")
+                
+                if len(temp_variants) == len(parts) and all(v.strip() for v in temp_variants):
+                    variants.extend(temp_variants)
+                    found_pattern = True
+                    break
+    
+    # Паттерн 2: "префикс вариант1/вариант2 суффикс"
+    if not found_pattern:
+        # Ищем общие слова в начале всех частей
+        all_words = [part.split() for part in parts if part.strip()]
+        if all_words and all(len(words) > 0 for words in all_words):
+            
+            # Находим общий префикс по словам
+            common_prefix_words = []
+            min_len = min(len(words) for words in all_words)
+            
+            for i in range(min_len):
+                word = all_words[0][i]
+                if all(len(w) > i and w[i] == word for w in all_words):
+                    common_prefix_words.append(word)
+                else:
+                    break
+            
+            # Находим общий суффикс по словам
+            common_suffix_words = []
+            for i in range(1, min_len + 1):
+                word = all_words[0][-i]
+                if all(len(w) >= i and w[-i] == word for w in all_words):
+                    common_suffix_words.insert(0, word)
+                else:
+                    break
+            
+            prefix_str = ' '.join(common_prefix_words) if common_prefix_words else ''
+            suffix_str = ' '.join(common_suffix_words) if common_suffix_words else ''
+            
+            # Создаем варианты
+            for part in parts:
+                words_in_part = part.split()
+                
+                # Убираем общий prefix и suffix, оставляем middle
+                start_idx = len(common_prefix_words)
+                end_idx = len(words_in_part) - len(common_suffix_words) if common_suffix_words else len(words_in_part)
+                
+                middle_words = words_in_part[start_idx:end_idx]
+                
+                # Собираем полный вариант
+                variant_parts = []
+                if prefix_str:
+                    variant_parts.append(prefix_str)
+                if middle_words:
+                    variant_parts.append(' '.join(middle_words))
+                if suffix_str:
+                    variant_parts.append(suffix_str)
+                
+                variant = ' '.join(variant_parts).strip()
+                if variant:
+                    variants.append(variant)
+            
+            if variants:
+                found_pattern = True
+    
+    # Если паттерн не найден, просто используем исходные части как варианты
+    if not found_pattern or not variants:
+        variants = [part.strip() for part in parts if part.strip()]
+    
+    # Убираем дубликаты и пустые строки, нормализуем пробелы
+    final_variants = []
+    for v in variants:
+        normalized = re.sub(r'\s+', ' ', v).strip()
+        if normalized and normalized not in final_variants:
+            final_variants.append(normalized)
+    
+    return final_variants
 
 
 def levenshtein(a: str, b: str) -> int:
@@ -298,10 +511,19 @@ def _extract_best_date_from_file(path: str, sheet_name: Optional[str]) -> Option
         return None
 
     today = date.today()
-    not_future = [d for d in candidates if d <= today]
-    if not_future:
-        return max(not_future)
-    # если все даты в будущем — возьмём ближайшую будущую
+    # Разрешаем даты в пределах недели в будущем (для планов меню)
+    near_future_limit = today + timedelta(days=7)
+    not_too_future = [d for d in candidates if d <= near_future_limit]
+    
+    if not_too_future:
+        # Предпочитаем даты не позже сегодня, но если их нет - берем ближайшую будущую в пределах недели
+        not_future = [d for d in not_too_future if d <= today]
+        if not_future:
+            return max(not_future)
+        else:
+            return min(not_too_future)
+    
+    # если все даты слишком далеко в будущем — возьмём ближайшую
     return min(candidates)
 
 
@@ -333,7 +555,7 @@ def _find_category_ranges(values: List[List[Optional[str]]], synonyms_map: dict)
 
 
 def _choose_column_for_block(values: List[List[Optional[str]]], start: int, end: int) -> str:
-    """Эвристика выбора колонки для блока: сравнивает заполненность A и E, берёт более заполненную.
+    """Автоматически выбирает лучший столбец для блока, проверяя столбцы A-F.
     start/end 1-базисные.
     """
     def non_empty_in_col(idx0: int) -> int:
@@ -344,35 +566,54 @@ def _choose_column_for_block(values: List[List[Optional[str]]], start: int, end:
             if normalize_dish(v, True):
                 cnt += 1
         return cnt
-    a_cnt = non_empty_in_col(col_to_index0('A'))
-    e_cnt = non_empty_in_col(col_to_index0('E'))
-    return 'A' if a_cnt >= e_cnt else 'E'
+    
+    # Проверяем столбцы A, B, C, D, E, F
+    columns_to_check = ['A', 'B', 'C', 'D', 'E', 'F']
+    best_col = 'A'
+    best_count = 0
+    
+    for col_letter in columns_to_check:
+        try:
+            col_idx = col_to_index0(col_letter)
+            count = non_empty_in_col(col_idx)
+            if count > best_count:
+                best_count = count
+                best_col = col_letter
+        except:
+            continue
+    
+    return best_col
 
 
-def _extract_dishes_from_both_columns(values: List[List[Optional[str]]], start: int, end: int, ignore_case: bool) -> Set[str]:
-    """Извлекает блюда из столбцов A и E для указанного диапазона строк.
+def _extract_dishes_from_multiple_columns(values: List[List[Optional[str]]], start: int, end: int, ignore_case: bool, columns: List[str] = None) -> Set[str]:
+    """Извлекает блюда из указанных столбцов для указанного диапазона строк.
     start/end 1-базисные.
     """
+    if columns is None:
+        columns = ['A', 'B', 'C', 'D', 'E', 'F']
+    
     dishes = set()
-    a_idx = col_to_index0('A')
-    e_idx = col_to_index0('E')
     
     for r in range(start, end + 1):
         row = values[r - 1] if r - 1 < len(values) else []
         
-        # Проверяем столбец A
-        v_a = row[a_idx] if a_idx < len(row) else None
-        name_a = normalize_dish(v_a, ignore_case)
-        if name_a:
-            dishes.add(name_a)
-        
-        # Проверяем столбец E
-        v_e = row[e_idx] if e_idx < len(row) else None
-        name_e = normalize_dish(v_e, ignore_case)
-        if name_e:
-            dishes.add(name_e)
+        # Проверяем все указанные столбцы
+        for col_letter in columns:
+            try:
+                col_idx = col_to_index0(col_letter)
+                v = row[col_idx] if col_idx < len(row) else None
+                variants = normalize_dish_with_variants(v, ignore_case)
+                for variant in variants:
+                    if variant:
+                        dishes.add(variant)
+            except:
+                continue
             
     return dishes
+
+def _extract_dishes_from_both_columns(values: List[List[Optional[str]]], start: int, end: int, ignore_case: bool) -> Set[str]:
+    """Легаси функция для обратной совместимости."""
+    return _extract_dishes_from_multiple_columns(values, start, end, ignore_case, ['A', 'D'])
 
 
 def compare_and_highlight(
@@ -399,17 +640,27 @@ def compare_and_highlight(
     d1 = _extract_best_date_from_file(path1, sheet1)
     d2 = _extract_best_date_from_file(path2, sheet2)
     
-    # Определяем самую позднюю дату из двух файлов для использования в выходном файле
-    latest_date = None
-    if d1 and d2:
-        latest_date = max(d1, d2)
-    elif d1:
-        latest_date = d1
-    elif d2:
-        latest_date = d2
+    # Отладочная информация
+    print(f"DEBUG: Даты из файлов - d1: {d1}, d2: {d2}")
     
-    # ВАЖНО: Независимо от выбора final_choice, ВСЕГДА используем самую позднюю дату
-    # для названия выходного файла, даже если финальным выбран файл с более ранней датой
+    # Определяем дату для отображения и сохранения: максимум из дат файлов и текущей даты
+    files_max_date: Optional[date] = None
+    if d1 and d2:
+        files_max_date = max(d1, d2)
+    elif d1:
+        files_max_date = d1
+    elif d2:
+        files_max_date = d2
+
+    today_dt = date.today()
+    display_date: date = max(files_max_date, today_dt) if files_max_date else today_dt
+    
+    print(f"DEBUG: Максимальная дата из файлов: {files_max_date}")
+    print(f"DEBUG: Сегодняшняя дата: {today_dt}")
+    print(f"DEBUG: Итоговая дата для отображения: {display_date}")
+    
+    # ВАЖНО: Независимо от выбора final_choice, используем display_date
+    # для названия выходного файла и заголовка листа
     
     if final_choice == 1:
         final_path, final_sheet = path1, sheet1
@@ -463,116 +714,181 @@ def compare_and_highlight(
     ref_ranges = _find_category_ranges(ref_vals, synonyms_map)
     final_ranges = _find_category_ranges(final_vals, synonyms_map)
 
-    # Если категории не обнаружены — fallback к логике сравнения по двум столбцам глобально
+    # Если категории не обнаружены — fallback к логике сравнения по столбцам A и D глобально
     if not ref_ranges or not final_ranges:
-        # Собираем референсный набор блюд из обоих столбцов (col1 и col2) целиком по листу
-        ref_cols = sorted(set([col1, col2]))
+        # Собираем референсный набор блюд из столбцов A и D целиком по листу
+        ref_cols = ['A', 'D']
         ref_set: Set[str] = set()
         for c_letter in ref_cols:
-            c_idx = col_to_index0(c_letter)
-            for r in range(max(0, header_row2), len(ref_vals)):
-                row = ref_vals[r] if r < len(ref_vals) else []
-                v = row[c_idx] if c_idx < len(row) else None
-                name = normalize_dish(v, ignore_case)
-                if name:
-                    ref_set.add(name)
+                c_idx = col_to_index0(c_letter)
+                for r in range(max(0, header_row2), len(ref_vals)):
+                    row = ref_vals[r] if r < len(ref_vals) else []
+                    v = row[c_idx] if c_idx < len(row) else None
+                    variants = normalize_dish_with_variants(v, ignore_case)
+                    for variant in variants:
+                        if variant:
+                            ref_set.add(variant)
 
         def is_match_fallback(dish: str) -> bool:
-            if not use_fuzzy:
-                return dish in ref_set
-            best = 0
-            for s in ref_set:
-                sim = sim_percent(dish, s)
-                if sim > best:
-                    best = sim
-                if best >= fuzzy_threshold:
-                    return True
-            return best >= fuzzy_threshold
+            # Проверяем все варианты блюда
+            dish_variants = normalize_dish_with_variants(dish, ignore_case)
+            for dish_variant in dish_variants:
+                if not dish_variant:
+                    continue
+                if not use_fuzzy:
+                    if dish_variant in ref_set:
+                        return True
+                else:
+                    best = 0
+                    for s in ref_set:
+                        sim = sim_percent(dish_variant, s)
+                        if sim > best:
+                            best = sim
+                        if best >= fuzzy_threshold:
+                            return True
+            return False
 
         from openpyxl.styles import Font
         red_font = Font(color="FF0000")
         idx_a = col_to_index0('A')
-        idx_e = col_to_index0('E')
+        idx_d = col_to_index0('D')
         matches = 0
         for r in range(1, sh.max_row + 1):
             if r <= max(1, header_row1):
                 continue
             # Проверяем столбец A
             cell_a = sh.cell(row=r, column=idx_a + 1)
-            text_a = normalize_dish(str(cell_a.value) if cell_a.value is not None else '', ignore_case)
-            if text_a and is_match_fallback(text_a):
+            text_a = str(cell_a.value) if cell_a.value is not None else ''
+            if text_a.strip() and is_match_fallback(text_a):
                 cell_a.font = red_font
                 matches += 1
-            # Проверяем столбец E
-            cell_e = sh.cell(row=r, column=idx_e + 1)
-            text_e = normalize_dish(str(cell_e.value) if cell_e.value is not None else '', ignore_case)
-            if text_e and is_match_fallback(text_e):
-                cell_e.font = red_font
+            # Проверяем столбец D
+            cell_d = sh.cell(row=r, column=idx_d + 1)
+            text_d = str(cell_d.value) if cell_d.value is not None else ''
+            if text_d.strip() and is_match_fallback(text_d):
+                cell_d.font = red_font
                 matches += 1
-        # Дата используется только в названии файла, не добавляем её в содержимое
-        out_path = make_final_output_path(final_xlsx, latest_date)
+        # Добавляем заголовок с датой и сохраняем с корректной датой
+        _add_date_info_to_worksheet(sh, display_date)
+        out_path = make_final_output_path(final_xlsx, display_date)
         wb.save(out_path)
         wb.close()
         return out_path, matches
 
-    # Построим множества по категориям из ref, извлекая блюда из столбцов A и E одновременно
+    # Построим множества по категориям из ref, автоматически определяя лучшие столбцы
     ref_sets: dict = {}
+    ref_category_columns: dict = {}  # храним информацию о столбцах для каждой категории
+    
     for cat, (start, end) in ref_ranges.items():
-        # Извлекаем блюда из обоих столбцов (A и E)
-        items = _extract_dishes_from_both_columns(ref_vals, start, end, ignore_case)
+        # Автоматически находим лучшие столбцы для категории
+        best_cols = []
+        columns_to_try = ['A', 'D']
+        
+        # Находим 2 лучших столбца
+        column_scores = []
+        for col_letter in columns_to_try:
+            try:
+                col_idx = col_to_index0(col_letter)
+                score = 0
+                for r in range(start, end + 1):
+                    row = ref_vals[r - 1] if r - 1 < len(ref_vals) else []
+                    v = row[col_idx] if col_idx < len(row) else None
+                    if normalize_dish(v, ignore_case):
+                        score += 1
+                column_scores.append((col_letter, score))
+            except:
+                column_scores.append((col_letter, 0))
+        
+        # Сортируем по оценке и берём 2 лучших
+        column_scores.sort(key=lambda x: x[1], reverse=True)
+        best_cols = [col for col, score in column_scores[:2] if score > 0]
+        
+        if not best_cols:
+            best_cols = ['A']  # fallback
+        
+        ref_category_columns[cat] = best_cols
+        items = _extract_dishes_from_multiple_columns(ref_vals, start, end, ignore_case, best_cols)
         ref_sets[cat] = items
 
-    # Также сформируем глобальный набор блюд из референса (оба столбца, весь лист)
-    ref_global_set: Set[str] = _extract_dishes_from_both_columns(ref_vals, 1, len(ref_vals), ignore_case)
+    # Также сформируем глобальный набор блюд из референса (все столбцы, весь лист)
+    ref_global_set: Set[str] = _extract_dishes_from_multiple_columns(ref_vals, 1, len(ref_vals), ignore_case)
 
     def is_match_cat(cat: str, dish: str) -> bool:
-        # Сначала пробуем совпадение в пределах категории, затем глобально по всему листу
-        sset = ref_sets.get(cat, set())
-        if not use_fuzzy:
-            return (dish in sset) or (dish in ref_global_set)
-        best = 0
-        # Проверяем категорию
-        for s in sset:
-            sim = sim_percent(dish, s)
-            if sim > best:
-                best = sim
-            if best >= fuzzy_threshold:
-                return True
-        # Проверяем глобальный набор
-        for s in ref_global_set:
-            sim = sim_percent(dish, s)
-            if sim > best:
-                best = sim
-            if best >= fuzzy_threshold:
-                return True
-        return best >= fuzzy_threshold
+        # Проверяем все варианты блюда
+        dish_variants = normalize_dish_with_variants(dish, ignore_case)
+        for dish_variant in dish_variants:
+            if not dish_variant:
+                continue
+            # Сначала пробуем совпадение в пределах категории, затем глобально по всему листу
+            sset = ref_sets.get(cat, set())
+            if not use_fuzzy:
+                if (dish_variant in sset) or (dish_variant in ref_global_set):
+                    return True
+            else:
+                best = 0
+                # Проверяем категорию
+                for s in sset:
+                    sim = sim_percent(dish_variant, s)
+                    if sim > best:
+                        best = sim
+                    if best >= fuzzy_threshold:
+                        return True
+                # Проверяем глобальный набор
+                for s in ref_global_set:
+                    sim = sim_percent(dish_variant, s)
+                    if sim > best:
+                        best = sim
+                    if best >= fuzzy_threshold:
+                        return True
+        return False
 
     from openpyxl.styles import Font
     red_font = Font(color="FF0000")
 
     matches = 0
     for cat, (start, end) in final_ranges.items():
-        # Проверяем оба столбца A и E
-        a_idx = col_to_index0('A')
-        e_idx = col_to_index0('E')
+        # Определяем лучшие столбцы для категории в итоговом файле
+        final_best_cols = []
+        columns_to_try = ['A', 'D']
         
-        for r in range(start, min(end, sh.max_row) + 1):
-            # Проверяем столбец A
-            cell_a = sh.cell(row=r, column=a_idx + 1)
-            text_a = normalize_dish(str(cell_a.value) if cell_a.value is not None else '', ignore_case)
-            if text_a and is_match_cat(cat, text_a):
-                cell_a.font = red_font
-                matches += 1
-            
-            # Проверяем столбец E
-            cell_e = sh.cell(row=r, column=e_idx + 1)
-            text_e = normalize_dish(str(cell_e.value) if cell_e.value is not None else '', ignore_case)
-            if text_e and is_match_cat(cat, text_e):
-                cell_e.font = red_font
-                matches += 1
+        # Находим 2 лучших столбца в итоговом файле
+        column_scores = []
+        for col_letter in columns_to_try:
+            try:
+                col_idx = col_to_index0(col_letter)
+                score = 0
+                for r in range(start, end + 1):
+                    row = final_vals[r - 1] if r - 1 < len(final_vals) else []
+                    v = row[col_idx] if col_idx < len(row) else None
+                    if normalize_dish(v, ignore_case):
+                        score += 1
+                column_scores.append((col_letter, score))
+            except:
+                column_scores.append((col_letter, 0))
+        
+        # Сортируем по оценке и берём 2 лучших
+        column_scores.sort(key=lambda x: x[1], reverse=True)
+        final_best_cols = [col for col, score in column_scores[:2] if score > 0]
+        
+        if not final_best_cols:
+            final_best_cols = ['A']  # fallback
+        
+        # Проверяем все лучшие столбцы
+        for col_letter in final_best_cols:
+            try:
+                col_idx = col_to_index0(col_letter)
+                for r in range(start, min(end, sh.max_row) + 1):
+                    cell = sh.cell(row=r, column=col_idx + 1)
+                    text = str(cell.value) if cell.value is not None else ''
+                    if text.strip() and is_match_cat(cat, text):
+                        cell.font = red_font
+                        matches += 1
+            except:
+                continue
 
-    # Дата используется только в названии файла, не добавляем её в содержимое
-    out_path = make_final_output_path(final_xlsx, latest_date)
+    # Добавляем заголовок с датой и сохраняем с корректной датой
+    _add_date_info_to_worksheet(sh, display_date)
+    out_path = make_final_output_path(final_xlsx, display_date)
     wb.save(out_path)
     wb.close()
     return out_path, matches
