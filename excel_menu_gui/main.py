@@ -14,6 +14,10 @@ from PySide6.QtWidgets import (
 )
 
 from app.services.comparator import compare_and_highlight, get_sheet_names, ColumnParseError
+# Временная алиас-совместимость для старых импортов внутри процесса
+import importlib as _importlib
+sys.modules.setdefault('comparator', _importlib.import_module('app.services.comparator'))
+sys.modules.setdefault('brokerage_journal', _importlib.import_module('app.reports.brokerage_journal'))
 from app.services.template_linker import default_template_path
 from app.gui.theme import ThemeMode, apply_theme, start_system_theme_watcher
 from app.reports.presentation_handler import create_presentation_with_excel_data
@@ -663,7 +667,7 @@ class MainWindow(QMainWindow):
                 return
             
             # Получаем дату для названия файла
-            from brokerage_journal import BrokerageJournalGenerator
+            from app.reports.brokerage_journal import BrokerageJournalGenerator
             from datetime import date
             
             generator = BrokerageJournalGenerator()

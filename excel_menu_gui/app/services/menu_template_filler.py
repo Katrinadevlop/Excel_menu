@@ -288,7 +288,7 @@ class MenuTemplateFiller:
         return 7  # По умолчанию начинаем с 7-й строки
     
     def handle_caesar_salad(self, dish_name: str) -> List[str]:
-        """Обрабатывает Цезарь салат, разделяя по слэшу"""
+        """Обрабатывает Цезарь салат, разделяя по слэшу (устарело)."""
         if 'цезарь' in dish_name.lower() and '/' in dish_name:
             parts = dish_name.split('/')
             result = []
@@ -300,18 +300,71 @@ class MenuTemplateFiller:
                     result.append(f"{base.split()[0]} {part.strip()}")
             return result
         return [dish_name]
+
+    def expand_variants_with_details(self, name: str, weight: str, price: str) -> List[Dict[str, str]]:
+        """
+        Разворачивает запись блюда с вариантами, разделёнными '/', сохраняя соответствие
+        для веса и цены, если они также содержат варианты через '/'.
+
+        Примеры:
+            name:  "Омлет/Омлет с брокколи", weight: "170г/200г", price: "140/170"
+              -> [
+                   {name: "Омлет", weight: "170г", price: "140"},
+                   {name: "Омлет с брокколи", weight: "200г", price: "170"}
+                 ]
+
+            name:  "Яйцо отварное/жареное", weight: "1шт", price: "50/55"
+              -> [
+                   {name: "Яйцо отварное", weight: "1шт", price: "50"},
+                   {name: "Яйцо жареное",  weight: "1шт", price: "55"}
+                 ]
+        """
+        if not name or '/' not in name:
+            return [{"name": (name or '').strip(), "weight": (weight or '').strip(), "price": (price or '').strip()}]
+
+        name_parts = [p.strip() for p in name.split('/') if p.strip()]
+        w_parts = [p.strip() for p in (weight or '').split('/') if p.strip()] if weight else []
+        p_parts = [p.strip() for p in (price or '').split('/') if p.strip()] if price else []
+
+        # Восстановление названий для случаев типа "Яйцо отварное/жареное"
+        def rebuild_names(parts: List[str]) -> List[str]:
+            if len(parts) < 2:
+                return parts
+            first = parts[0]
+            if ' ' not in first:
+                # Первый вариант — одно слово, второй может быть полным названием
+                return parts
+            base = first.rsplit(' ', 1)[0]  # всё до последнего слова как общая основа
+            rebuilt = [first]
+            for p in parts[1:]:
+                if ' ' in p:
+                    rebuilt.append(p)
+                else:
+                    rebuilt.append(f"{base} {p}")
+            return rebuilt
+
+        name_parts = rebuild_names(name_parts)
+
+        variants = []
+        n = len(name_parts)
+        for i in range(n):
+            ni = name_parts[i]
+            wi = w_parts[i] if i < len(w_parts) else (weight or '').strip()
+            pi = p_parts[i] if i < len(p_parts) else (price or '').strip()
+            variants.append({"name": ni, "weight": wi, "price": pi})
+        return variants
     
     def find_category_end_row(self, ws, col: int, start_row: int, category: str) -> int:
         """Находит конечную строку для категории, ища следующий заголовок"""
         # Особая логика для гарниров - ищем до "НАПИТКИ"
         if category == 'гарнир':
-            for row in range(start_row, min(50, ws.max_row + 1)):
+            for row in range(start_row, min(200, ws.max_row + 1)):
                 cell_val = ws.cell(row=row, column=col).value
                 if cell_val and 'напит' in str(cell_val).lower():
                     return row - 1  # Возвращаем последнюю строку перед "Напитки"
         
         # Для остальных категорий ищем до следующего заголовка
-        for row in range(start_row, min(50, ws.max_row + 1)):
+        for row in range(start_row, min(200, ws.max_row + 1)):
             cell_val = ws.cell(row=row, column=col).value
             if cell_val:
                 cell_text = str(cell_val).lower().strip()
@@ -319,6 +372,26 @@ class MenuTemplateFiller:
                     return row - 1  # Возвращаем последнюю строку перед новым заголовком
         
         # Если не нашли следующий заголовок, возвращаем конец листа
+        return ws.max_row
+
+    def find_end_row_until_salads(self, ws, start_row: int) -> int:
+        """Ищет строку конца блока завтраков до заголовка "САЛАТЫ И ХОЛОДНЫЕ ЗАКУСКИ".
+        Склеивает текст строки по всем колонкам и проверяет наличие ключевых слов.
+        Возвращает номер строки-1 перед заголовком; если заголовок не найден — возвращает конец листа.
+        """
+        def row_text(r: int) -> str:
+            parts = []
+            for c in range(1, ws.max_column + 1):
+                v = ws.cell(row=r, column=c).value
+                if v is not None and str(v).strip():
+                    parts.append(str(v).strip())
+            return ' '.join(parts).lower()
+
+        for row in range(start_row, min(200, ws.max_row + 1)):
+            txt = row_text(row)
+            # Заголовок может быть записан по-разному, проверяем сочетания
+            if ('салат' in txt) and ('холодн' in txt or 'закуск' in txt):
+                return row - 1
         return ws.max_row
     
     def fill_template_column(self, ws, col: int, dishes: List[str], start_row: int) -> int:
@@ -424,8 +497,10 @@ class MenuTemplateFiller:
         from app.services.dish_extractor import DishItem
         from math import inf
 
-        items = [DishItem(name=d.get('name', ''), weight=d.get('weight', ''), price=d.get('price', ''))
-                 for d in dishes_with_details]
+        items_raw: List[Dict[str, str]] = []
+        for d in dishes_with_details:
+            items_raw.extend(self.expand_variants_with_details(d.get('name', ''), d.get('weight', ''), d.get('price', '')))
+        items = [DishItem(name=dr.get('name',''), weight=dr.get('weight',''), price=dr.get('price','')) for dr in items_raw]
         # До конца листа
         stop_row = ws.max_row + 1
         return fill_cells_sequential(
@@ -443,8 +518,10 @@ class MenuTemplateFiller:
         from app.services.excel_inserter import fill_cells_sequential, TargetColumns
         from app.services.dish_extractor import DishItem
 
-        items = [DishItem(name=d.get('name', ''), weight=d.get('weight', ''), price=d.get('price', ''))
-                 for d in dishes_with_details]
+        items_raw: List[Dict[str, str]] = []
+        for d in dishes_with_details:
+            items_raw.extend(self.expand_variants_with_details(d.get('name', ''), d.get('weight', ''), d.get('price', '')))
+        items = [DishItem(name=dr.get('name',''), weight=dr.get('weight',''), price=dr.get('price','')) for dr in items_raw]
         # end_row включителен в прежней логике, общий движок ожидает исключающую верхнюю границу
         stop_row = end_row + 1
         return fill_cells_sequential(
@@ -565,6 +642,9 @@ class MenuTemplateFiller:
                     continue
                 
                 col = self.find_column_by_header(ws, template_header)
+                # Требование: завтраки всегда пишем в колонку A (1)
+                if category == 'завтрак':
+                    col = 1
                 if not col:
                     print(f"Предупреждение: Не найдена колонка для '{template_header}'")
                     continue
@@ -572,10 +652,15 @@ class MenuTemplateFiller:
                 # Находим начальную строку для данных
                 start_row = self.find_data_start_row(ws, col, category)
                 
-                # Особая логика для гарниров - ограничиваем диапазон
+                # Особая логика ограничений по диапазону
                 if category == 'гарнир':
                     end_row = self.find_category_end_row(ws, col, start_row, category)
                     print(f"Гарниры: ограничиваем диапазон {start_row}-{end_row}")
+                    filled_count = self.fill_template_column_limited(ws, col, dishes, start_row, end_row, category)
+                elif category == 'завтрак':
+                    # Завтраки должны попадать строго между заголовками "ЗАВТРАКИ" и "САЛАТЫ И ХОЛОДНЫЕ ЗАКУСКИ"
+                    end_row = self.find_end_row_until_salads(ws, start_row)
+                    print(f"Завтраки: ограничиваем диапазон {start_row}-{end_row}")
                     filled_count = self.fill_template_column_limited(ws, col, dishes, start_row, end_row, category)
                 else:
                     # Обычное заполнение для остальных категорий
@@ -682,10 +767,16 @@ class MenuTemplateFiller:
                 # Находим начальную строку для данных
                 start_row = self.find_data_start_row(ws, name_col, category)
                 
-                # Особая логика для гарниров - ограничиваем диапазон
+                # Особая логика для гарниров и завтраков — ограничиваем диапазон по следующему заголовку
                 if category == 'гарнир':
                     end_row = self.find_category_end_row(ws, name_col, start_row, category)
                     print(f"Гарниры: ограничиваем диапазон {start_row}-{end_row}")
+                    filled_count = self.fill_template_with_details_limited(
+                        ws, name_col, weight_col, price_col, dishes_details, start_row, end_row, category
+                    )
+                elif category == 'завтрак':
+                    end_row = self.find_end_row_until_salads(ws, start_row)
+                    print(f"Завтраки: ограничиваем диапазон {start_row}-{end_row}")
                     filled_count = self.fill_template_with_details_limited(
                         ws, name_col, weight_col, price_col, dishes_details, start_row, end_row, category
                     )

@@ -15,21 +15,35 @@ CATEGORIES = [
 
 
 def default_template_path() -> str:
-    # Support PyInstaller onefile (sys._MEIPASS) and dev mode
+    """
+    Возвращает путь к шаблону меню 'Шаблон меню пример.xlsx', учитывая запуск:
+    - из dev-окружения (структура репозитория)
+    - из PyInstaller onefile (sys._MEIPASS)
+    - из любых рабочих директорий (поиск относительно cwd)
+    """
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    repo_root = Path(__file__).resolve().parents[2]  # excel_menu_gui/
+    cwd = Path.cwd()
+
     candidates = [
+        # PyInstaller раскладка
         base / "excel_menu_gui" / "templates" / "Шаблон меню пример.xlsx",
         base / "templates" / "Шаблон меню пример.xlsx",
-        Path(__file__).parent / "templates" / "Шаблон меню пример.xlsx",
-        # Оставляем старые пути для совместимости
+        # Dev-режим: путь от корня репозитория
+        repo_root / "templates" / "Шаблон меню пример.xlsx",
+        # На случай запуска из корня проекта как CWD
+        cwd / "templates" / "Шаблон меню пример.xlsx",
+        # Оставляем старые пути для совместимости (.xls)
         base / "excel_menu_gui" / "templates" / "menu_template.xls",
         base / "templates" / "menu_template.xls",
-        Path(__file__).parent / "templates" / "menu_template.xls",
+        repo_root / "templates" / "menu_template.xls",
+        cwd / "templates" / "menu_template.xls",
     ]
     for p in candidates:
         if p.exists():
             return str(p)
-    return str(Path(__file__).parent / "templates" / "Шаблон меню пример.xlsx")
+    # Последний fallback — путь относительно текущего пакета (может не существовать)
+    return str(repo_root / "templates" / "Шаблон меню пример.xlsx")
 
 
 def find_headers(ws) -> dict:

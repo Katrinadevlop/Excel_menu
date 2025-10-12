@@ -13,7 +13,7 @@ from app.services.dish_extractor import (
     extract_poultry_dishes_from_excel,
     extract_fish_dishes_from_column_e,
     extract_fish_dishes_from_excel,
-    extract_side_dishes_from_excel,
+    extract_side_dishes_from_excel, extract_dishes_from_excel,
 )
 
 
