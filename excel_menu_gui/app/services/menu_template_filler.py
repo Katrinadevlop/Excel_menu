@@ -417,90 +417,44 @@ class MenuTemplateFiller:
         
         return filled_count
     
-    def fill_template_with_details(self, ws, name_col: int, weight_col: int, price_col: int, 
+    def fill_template_with_details(self, ws, name_col: int, weight_col: int, price_col: int,
                                   dishes_with_details: List[Dict[str, str]], start_row: int) -> int:
-        """Заполняет шаблон блюдами с деталями (название, вес, цена)"""
-        current_row = start_row
-        filled_count = 0
-        
-        for dish_info in dishes_with_details:
-            if current_row > ws.max_row:
-                break
-            
-            # Заполняем название
-            name_cell = ws.cell(row=current_row, column=name_col)
-            if not name_cell.value or str(name_cell.value).strip() == '':
-                try:
-                    name_cell.value = dish_info['name']
-                except AttributeError:
-                    pass
-            
-            # Заполняем вес
-            if dish_info['weight'] and weight_col:
-                weight_cell = ws.cell(row=current_row, column=weight_col)
-                if not weight_cell.value or str(weight_cell.value).strip() == '':
-                    try:
-                        weight_cell.value = dish_info['weight']
-                    except AttributeError:
-                        pass
-            
-            # Заполняем цену
-            if dish_info['price'] and price_col:
-                price_cell = ws.cell(row=current_row, column=price_col)
-                if not price_cell.value or str(price_cell.value).strip() == '':
-                    try:
-                        price_cell.value = dish_info['price']
-                    except AttributeError:
-                        pass
-            
-            filled_count += 1
-            print(f"Заполнено в строку {current_row}: {dish_info['name']} | {dish_info['weight']} | {dish_info['price']}")
-            current_row += 1
-        
-        return filled_count
+        """Заполняет шаблон блюдами с деталями (название, вес, цена) через общий движок вставки."""
+        from app.services.excel_inserter import fill_cells_sequential, TargetColumns
+        from app.services.dish_extractor import DishItem
+        from math import inf
+
+        items = [DishItem(name=d.get('name', ''), weight=d.get('weight', ''), price=d.get('price', ''))
+                 for d in dishes_with_details]
+        # До конца листа
+        stop_row = ws.max_row + 1
+        return fill_cells_sequential(
+            ws,
+            start_row=start_row,
+            stop_row=stop_row,
+            columns=TargetColumns(name_col=name_col, weight_col=weight_col, price_col=price_col),
+            dishes=items,
+            replace_only_empty=True,
+        )
     
-    def fill_template_with_details_limited(self, ws, name_col: int, weight_col: int, price_col: int, 
+    def fill_template_with_details_limited(self, ws, name_col: int, weight_col: int, price_col: int,
                                           dishes_with_details: List[Dict[str, str]], start_row: int, end_row: int, category: str) -> int:
-        """Заполняет шаблон блюдами с деталями в ограниченном диапазоне"""
-        current_row = start_row
-        filled_count = 0
-        
-        for dish_info in dishes_with_details:
-            if current_row > end_row:
-                print(f"Превышен лимит для {category}: конец на строке {end_row}")
-                break
-            
-            # Заполняем название
-            name_cell = ws.cell(row=current_row, column=name_col)
-            if not name_cell.value or str(name_cell.value).strip() == '':
-                try:
-                    name_cell.value = dish_info['name']
-                except AttributeError:
-                    pass
-            
-            # Заполняем вес
-            if dish_info['weight'] and weight_col:
-                weight_cell = ws.cell(row=current_row, column=weight_col)
-                if not weight_cell.value or str(weight_cell.value).strip() == '':
-                    try:
-                        weight_cell.value = dish_info['weight']
-                    except AttributeError:
-                        pass
-            
-            # Заполняем цену
-            if dish_info['price'] and price_col:
-                price_cell = ws.cell(row=current_row, column=price_col)
-                if not price_cell.value or str(price_cell.value).strip() == '':
-                    try:
-                        price_cell.value = dish_info['price']
-                    except AttributeError:
-                        pass
-            
-            filled_count += 1
-            print(f"Заполнено {category} в строку {current_row}: {dish_info['name']} | {dish_info['weight']} | {dish_info['price']}")
-            current_row += 1
-        
-        return filled_count
+        """Заполняет шаблон блюдами с деталями в ограниченном диапазоне через общий движок вставки."""
+        from app.services.excel_inserter import fill_cells_sequential, TargetColumns
+        from app.services.dish_extractor import DishItem
+
+        items = [DishItem(name=d.get('name', ''), weight=d.get('weight', ''), price=d.get('price', ''))
+                 for d in dishes_with_details]
+        # end_row включителен в прежней логике, общий движок ожидает исключающую верхнюю границу
+        stop_row = end_row + 1
+        return fill_cells_sequential(
+            ws,
+            start_row=start_row,
+            stop_row=stop_row,
+            columns=TargetColumns(name_col=name_col, weight_col=weight_col, price_col=price_col),
+            dishes=items,
+            replace_only_empty=True,
+        )
     
     def extract_date_from_menu(self, menu_path: str) -> Optional[datetime]:
         """Извлекает дату из файла меню (используем уже готовую логику)"""

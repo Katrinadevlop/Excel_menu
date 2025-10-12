@@ -129,38 +129,32 @@ class BrokerageJournalGenerator:
                     break
                 stop_row += 1
             
-            # Заполняем ТОЛЬКО пустые ячейки первого столбца (A) блюдами из left_list
-            inserted_left = 0
-            dish_idx = 0
-            for r in range(start_row, stop_row):
-                if dish_idx >= len(left_list):
-                    break
-                current_val = ws.cell(row=r, column=1).value
-                if current_val in (None, ''):
-                    ws.cell(row=r, column=1, value=left_list[dish_idx])
-                    # НЕ МЕНЯЕМ время - оставляем как в шаблоне
-                    dish_idx += 1
-                    inserted_left += 1
-                else:
-                    # Ячейка занята — не трогаем её и идем дальше
-                    continue
-            
-            # Заполняем ТОЛЬКО пустые ячейки седьмого столбца (G) блюдами из right_list
-            inserted_right = 0
-            dish_idx = 0
-            for r in range(start_row, stop_row):
-                if dish_idx >= len(right_list):
-                    break
-                current_val = ws.cell(row=r, column=7).value  # Столбец G = 7
-                if current_val in (None, ''):
-                    ws.cell(row=r, column=7, value=right_list[dish_idx])
-                    # НЕ МЕНЯЕМ время - оставляем как в шаблоне
-                    dish_idx += 1
-                    inserted_right += 1
-                else:
-                    # Ячейка занята — не трогаем её и идем дальше
-                    continue
-            
+            # Унифицированная вставка через общий движок
+            from app.services.excel_inserter import fill_cells_sequential, TargetColumns
+            from app.services.dish_extractor import DishItem
+
+            # Преобразуем списки названий в DishItem без веса/цены
+            left_items = [DishItem(name=n) for n in left_list]
+            right_items = [DishItem(name=n) for n in right_list]
+
+            inserted_left = fill_cells_sequential(
+                ws,
+                start_row=start_row,
+                stop_row=stop_row,
+                columns=TargetColumns(name_col=1),
+                dishes=left_items,
+                replace_only_empty=True,
+            )
+
+            inserted_right = fill_cells_sequential(
+                ws,
+                start_row=start_row,
+                stop_row=stop_row,
+                columns=TargetColumns(name_col=7),  # G
+                dishes=right_items,
+                replace_only_empty=True,
+            )
+
             wb.save(output_path)
             return True, f"Бракеражный журнал создан успешно для даты {date_str} (вставлено {inserted_left} блюд в колонку A, {inserted_right} блюд в колонку G)"
         except Exception as e:
