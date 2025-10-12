@@ -642,8 +642,16 @@ def _upper_no_yo(s: str) -> str:
 
 def detect_category_columns(df, category_row: int, category_name: str) -> List[int]:
     """
-    Определяет, в каких столбцах находятся данные категории.
-    Анализирует строку с заголовком категории и возвращает список столбцов [name_col, weight_col, price_col].
+    Определяет индексы столбцов для указанной категории в таблице DataFrame.
+
+    Args:
+        df (pandas.DataFrame): Таблица с исходными данными Excel без заголовков.
+        category_row (int): Номер строки (0-базовый индекс) с заголовком категории.
+        category_name (str): Текст заголовка категории (в верхнем регистре), например "САЛАТЫ".
+
+    Returns:
+        List[int]: Список из трёх индексов столбцов [name_col, weight_col, price_col].
+                   Если определить не удалось, возвращает правый набор [3, 4, 5].
     """
     try:
         row = df.iloc[category_row]
@@ -666,8 +674,15 @@ def detect_category_columns(df, category_row: int, category_name: str) -> List[i
 
 def extract_dishes_from_excel_column(excel_path: str, category_keywords: List[str]) -> List[DishItem]:
     """
-    Универсальная функция для извлечения блюд из Excel в колоночной структуре.
-    Предполагает, что данные расположены в колонках: название блюда | вес | цена.
+    Извлекает блюда из Excel при колоночной структуре данных (Название | Вес | Цена).
+
+    Args:
+        excel_path (str): Путь к Excel-файлу (.xlsx/.xlsm/.xls).
+        category_keywords (List[str]): Список ключевых фраз для идентификации нужной категории
+            (например: ['САЛАТЫ', 'ХОЛОДНЫЕ ЗАКУСКИ']). Поиск ведётся по строке заголовка.
+
+    Returns:
+        List[DishItem]: Список блюд с заполненными полями name/weight/price.
     """
     try:
         xls = pd.ExcelFile(excel_path)
@@ -749,6 +764,17 @@ def extract_dishes_from_excel_column(excel_path: str, category_keywords: List[st
 
 
 def extract_dishes_from_excel(excel_path: str, category_keywords: List[str]) -> List[DishItem]:
+    """
+    Унифицированный метод извлечения блюд по ключевым словам категории.
+    Сначала пробует колоночную структуру, затем — построчную.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+        category_keywords (List[str]): Ключевые слова для заголовка категории.
+
+    Returns:
+        List[DishItem]: Найденные блюда (может быть пустым списком).
+    """
     dishes = extract_dishes_from_excel_column(excel_path, category_keywords)
     if dishes:
         return dishes
@@ -756,6 +782,17 @@ def extract_dishes_from_excel(excel_path: str, category_keywords: List[str]) -> 
 
 
 def extract_dishes_from_excel_rows(excel_path: str, category_keywords: List[str]) -> List[DishItem]:
+    """
+    Извлекает блюда при построчной структуре: ищет строку заголовка категории,
+    затем читает последующие строки до следующей категории/пустых строк.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+        category_keywords (List[str]): Ключевые слова заголовка (например, ['ПЕРВЫЕ БЛЮДА']).
+
+    Returns:
+        List[DishItem]: Список найденных блюд с весом и ценой (если удалось распознать).
+    """
     try:
         try:
             xls = pd.ExcelFile(excel_path)
@@ -892,6 +929,17 @@ def extract_dishes_from_excel_rows(excel_path: str, category_keywords: List[str]
 
 
 def extract_dishes_from_excel_rows_with_stop(excel_path: str, category_keywords: List[str], stop_keywords: List[str]) -> List[DishItem]:
+    """
+    Построчное извлечение блюд до появления следующей категории-стоп слова.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+        category_keywords (List[str]): Ключевые слова целевой категории (начало диапазона).
+        stop_keywords (List[str]): Ключевые слова категорий, на которых нужно остановиться.
+
+    Returns:
+        List[DishItem]: Список блюд в пределах найденного диапазона.
+    """
     try:
         xls = pd.ExcelFile(excel_path)
         sheet_name = None
@@ -1016,6 +1064,16 @@ def extract_dishes_from_excel_rows_with_stop(excel_path: str, category_keywords:
 
 
 def extract_dishes_from_multiple_sheets(excel_path: str, sheet_names: List[str]) -> List[DishItem]:
+    """
+    Извлекает блюда, последовательно просматривая несколько листов по именам.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+        sheet_names (List[str]): Приоритетный список имён листов для чтения.
+
+    Returns:
+        List[DishItem]: Все найденные блюда на перечисленных листах.
+    """
     all_dishes: List[DishItem] = []
     try:
         xls = pd.ExcelFile(excel_path)
@@ -1053,6 +1111,15 @@ def extract_dishes_from_multiple_sheets(excel_path: str, sheet_names: List[str])
 
 
 def extract_salads_by_range(excel_path: str) -> List[DishItem]:
+    """
+    Извлекает салаты по диапазону: от 'САЛАТЫ И ХОЛОДНЫЕ ЗАКУСКИ' до 'СЭНДВИЧИ' или ближайшей следующей категории.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+
+    Returns:
+        List[DishItem]: Найденные салаты (название/вес/цена, если доступны).
+    """
     try:
         xls = pd.ExcelFile(excel_path)
         sheet_name = None
@@ -1147,6 +1214,15 @@ def extract_salads_by_range(excel_path: str) -> List[DishItem]:
 
 
 def extract_salads_from_excel(excel_path: str) -> List[DishItem]:
+    """
+    Высокоуровневое извлечение салатов: сначала по точному диапазону, затем по альтернативным листам.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+
+    Returns:
+        List[DishItem]: Список салатов.
+    """
     try:
         salads = extract_salads_by_range(excel_path)
         if salads:
@@ -1158,6 +1234,15 @@ def extract_salads_from_excel(excel_path: str) -> List[DishItem]:
 
 
 def extract_first_courses_by_range(excel_path: str) -> List[DishItem]:
+    """
+    Извлекает первые блюда по диапазону от 'ПЕРВЫЕ БЛЮДА' до следующей категории.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+
+    Returns:
+        List[DishItem]: Список первых блюд.
+    """
     try:
         xls = pd.ExcelFile(excel_path)
         sheet_name = None
@@ -1241,6 +1326,15 @@ def extract_first_courses_by_range(excel_path: str) -> List[DishItem]:
 
 
 def extract_first_courses_from_excel(excel_path: str) -> List[DishItem]:
+    """
+    Высокоуровневое извлечение первых блюд: сначала точный диапазон, затем общий поиск по ключевым словам.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+
+    Returns:
+        List[DishItem]: Список первых блюд.
+    """
     try:
         dishes = extract_first_courses_by_range(excel_path)
         if dishes:
@@ -1256,6 +1350,15 @@ def extract_first_courses_from_excel(excel_path: str) -> List[DishItem]:
 
 
 def extract_meat_dishes_by_range(excel_path: str) -> List[DishItem]:
+    """
+    Извлекает мясные блюда по диапазону от 'БЛЮДА ИЗ МЯСА' до 'БЛЮДА ИЗ ПТИЦЫ' (или ближайшей следующей категории).
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+
+    Returns:
+        List[DishItem]: Список мясных блюд.
+    """
     try:
         xls = pd.ExcelFile(excel_path)
         sheet_name = None
@@ -1343,6 +1446,16 @@ def extract_meat_dishes_by_range(excel_path: str) -> List[DishItem]:
 
 
 def extract_meat_dishes_from_excel(excel_path: str) -> List[DishItem]:
+    """
+    Высокоуровневое извлечение мясных блюд: диапазон, затем построчный поиск до стоп-категории,
+    затем общий поиск с фильтрацией супов.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+
+    Returns:
+        List[DishItem]: Список мясных блюд (без первых блюд/супов).
+    """
     try:
         dishes = extract_meat_dishes_by_range(excel_path)
         if dishes:
@@ -1370,6 +1483,15 @@ def extract_meat_dishes_from_excel(excel_path: str) -> List[DishItem]:
 
 
 def extract_poultry_dishes_by_range(excel_path: str) -> List[DishItem]:
+    """
+    Извлекает блюда из птицы по диапазону от 'БЛЮДА ИЗ ПТИЦЫ' до 'БЛЮДА ИЗ РЫБЫ'.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+
+    Returns:
+        List[DishItem]: Список блюд из птицы.
+    """
     try:
         xls = pd.ExcelFile(excel_path)
         sheet_name = None
@@ -1463,6 +1585,15 @@ def extract_poultry_dishes_by_range(excel_path: str) -> List[DishItem]:
 
 
 def extract_poultry_dishes_from_excel(excel_path: str) -> List[DishItem]:
+    """
+    Высокоуровневое извлечение блюд из птицы: точный диапазон, затем перебор листов.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+
+    Returns:
+        List[DishItem]: Список блюд из птицы.
+    """
     try:
         dishes = extract_poultry_dishes_by_range(excel_path)
         if dishes:
@@ -1475,6 +1606,15 @@ def extract_poultry_dishes_from_excel(excel_path: str) -> List[DishItem]:
 
 
 def extract_fish_dishes_by_range(excel_path: str) -> List[DishItem]:
+    """
+    Извлекает рыбные блюда по диапазону от 'БЛЮДА ИЗ РЫБЫ' до следующей категории (обычно 'ГАРНИРЫ').
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+
+    Returns:
+        List[DishItem]: Список рыбных блюд.
+    """
     try:
         xls = pd.ExcelFile(excel_path)
         sheet_name = None
@@ -1561,6 +1701,15 @@ def extract_fish_dishes_by_range(excel_path: str) -> List[DishItem]:
 
 
 def extract_fish_dishes_from_excel(excel_path: str) -> List[DishItem]:
+    """
+    Высокоуровневое извлечение рыбных блюд: точный диапазон, затем перебор листов.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+
+    Returns:
+        List[DishItem]: Список рыбных блюд.
+    """
     try:
         dishes = extract_fish_dishes_by_range(excel_path)
         if dishes:
@@ -1573,6 +1722,15 @@ def extract_fish_dishes_from_excel(excel_path: str) -> List[DishItem]:
 
 
 def extract_side_dishes_by_range(excel_path: str) -> List[DishItem]:
+    """
+    Извлекает гарниры по диапазону от 'ГАРНИРЫ' до следующей категории.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+
+    Returns:
+        List[DishItem]: Список гарниров.
+    """
     try:
         xls = pd.ExcelFile(excel_path)
         sheet_name = None
@@ -1682,6 +1840,15 @@ def extract_side_dishes_by_range(excel_path: str) -> List[DishItem]:
 
 
 def extract_side_dishes_from_excel(excel_path: str) -> List[DishItem]:
+    """
+    Высокоуровневое извлечение гарниров: точный диапазон, затем общий/альтернативный поиск.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+
+    Returns:
+        List[DishItem]: Список гарниров.
+    """
     try:
         dishes = extract_side_dishes_by_range(excel_path)
         if dishes:
@@ -1700,6 +1867,16 @@ def extract_side_dishes_from_excel(excel_path: str) -> List[DishItem]:
 
 
 def extract_fish_dishes_from_column_e(excel_path: str) -> List[DishItem]:
+    """
+    Извлекает рыбные блюда только из диапазона 'БЛЮДА ИЗ РЫБЫ' до 'ГАРНИРЫ',
+    используя колонки, в которых расположен заголовок раздела.
+
+    Args:
+        excel_path (str): Путь к Excel-файлу.
+
+    Returns:
+        List[DishItem]: Список рыбных блюд указанного диапазона.
+    """
     try:
         xls = pd.ExcelFile(excel_path)
         sheet_name = None

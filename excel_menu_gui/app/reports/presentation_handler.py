@@ -19,10 +19,14 @@ from app.services.dish_extractor import (
 
 def update_slide_with_dishes(slide, dishes: List[DishItem]) -> bool:
     """
-    Обновляет один слайд презентации, вставляя данные блюд в таблицы.
-    Умно выбирает подходящую таблицу: предпочитает таблицы с правильным заголовком,
-    затем выбирает самую большую по количеству строк.
-    Форматирование: Gilroy Medium 28pt, белый цвет, автоуменьшение и отступом 10 пикселей.
+    Обновляет один слайд презентации, вставляя данные блюд в подходящую таблицу и форматируя содержимое.
+
+    Args:
+        slide (pptx.slide.Slide): Слайд, в котором требуется обновить таблицу.
+        dishes (List[DishItem]): Список блюд для вставки (name, weight, price).
+
+    Returns:
+        bool: True, если таблица найдена и успешно обновлена; иначе False.
     """
     try:
         from pptx.util import Pt
@@ -196,13 +200,16 @@ def update_slide_with_dishes(slide, dishes: List[DishItem]) -> bool:
 def update_presentation_with_all_categories(presentation_path: str, all_dishes: dict, output_path: str) -> bool:
     """
     Обновляет презентацию, вставляя данные всех категорий блюд в соответствующие слайды.
-    
+
     Args:
-        presentation_path: путь к шаблону презентации
-        all_dishes: словарь с данными блюд для каждой категории
-                   {'salads': [...], 'first_courses': [...], 'meat': [...], 
-                    'poultry': [...], 'fish': [...], 'side_dishes': [...]}
-        output_path: путь для сохранения готовой презентации
+        presentation_path (str): Путь к исходному шаблону презентации (.pptx).
+        all_dishes (dict): Данные по категориям:
+            {'salads': List[DishItem], 'first_courses': List[DishItem], 'meat': List[DishItem],
+             'poultry': List[DishItem], 'fish': List[DishItem], 'side_dishes': List[DishItem]}.
+        output_path (str): Путь для сохранения обновлённой презентации.
+
+    Returns:
+        bool: True, если хотя бы один слайд успешно обновлён; иначе False.
     """
     try:
         # Копируем исходную презентацию
@@ -250,7 +257,15 @@ def update_presentation_with_all_categories(presentation_path: str, all_dishes: 
 
 def create_presentation_with_fish_and_side_dishes(template_path: str, excel_path: str, output_path: str) -> Tuple[bool, str]:
     """
-    Создает презентацию только с рыбными блюдами и вставляет их на 6-й слайд презентации.
+    Создаёт презентацию, заполняя 6-й слайд рыбными блюдами.
+
+    Args:
+        template_path (str): Путь к шаблону презентации .pptx.
+        excel_path (str): Путь к Excel-файлу с меню.
+        output_path (str): Путь для сохранения готовой презентации.
+
+    Returns:
+        Tuple[bool, str]: Пара (успех, сообщение).
     """
     try:
         if not Path(template_path).exists():
@@ -284,7 +299,15 @@ def create_presentation_with_fish_and_side_dishes(template_path: str, excel_path
 
 def create_presentation_with_excel_data(template_path: str, excel_path: str, output_path: str) -> Tuple[bool, str]:
     """
-    Создает презентацию со всеми категориями блюд: салаты, первые блюда, блюда из мяса, птицы, рыбы и гарниры.
+    Создаёт презентацию и заполняет слайды данными всех категорий блюд.
+
+    Args:
+        template_path (str): Путь к шаблону презентации .pptx.
+        excel_path (str): Путь к Excel-файлу с меню.
+        output_path (str): Путь для сохранения готовой презентации.
+
+    Returns:
+        Tuple[bool, str]: Пара (успех, подробное сообщение о вставленных данных).
     """
     try:
         if not Path(template_path).exists():
