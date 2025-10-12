@@ -131,7 +131,7 @@ class ExcelDataSource(DataSource):
     def __init__(self):
         self.categories_mapping = {
             'завтрак': 'завтрак',
-            'салат': 'салат', 
+            'салат': 'салат',
             'первое': 'первое',
             'мясо': 'мясо',
             'курица': 'курица',
@@ -632,3 +632,1176 @@ def extract_date_from_menu(menu_path: str) -> Optional[datetime]:
 def get_dish_extractor() -> DishExtractorService:
     """Возвращает экземпляр сервиса извлечения блюд"""
     return _extractor_service
+
+
+# ===== Дополнительные функции извлечения блюд (перенесены из presentation_handler) =====
+
+def _upper_no_yo(s: str) -> str:
+    return s.upper().replace('Ё', 'Е') if isinstance(s, str) else str(s).upper().replace('Ё', 'Е')
+
+
+def detect_category_columns(df, category_row: int, category_name: str) -> List[int]:
+    """
+    Определяет, в каких столбцах находятся данные категории.
+    Анализирует строку с заголовком категории и возвращает список столбцов [name_col, weight_col, price_col].
+    """
+    try:
+        row = df.iloc[category_row]
+        category_column = None
+        for col_idx in range(len(df.columns)):
+            if pd.notna(df.iloc[category_row, col_idx]):
+                cell_content = str(df.iloc[category_row, col_idx]).upper().replace('Ё', 'Е')
+                if category_name in cell_content:
+                    category_column = col_idx
+                    break
+        if category_column is None:
+            return [3, 4, 5]
+        if category_column <= 2:
+            return [0, 1, 2]
+        else:
+            return [3, 4, 5]
+    except Exception:
+        return [3, 4, 5]
+
+
+def extract_dishes_from_excel_column(excel_path: str, category_keywords: List[str]) -> List[DishItem]:
+    """
+    Универсальная функция для извлечения блюд из Excel в колоночной структуре.
+    Предполагает, что данные расположены в колонках: название блюда | вес | цена.
+    """
+    try:
+        xls = pd.ExcelFile(excel_path)
+        sheet_name = None
+        for nm in xls.sheet_names:
+            if 'касс' in str(nm).strip().lower():
+                sheet_name = nm
+                break
+        if sheet_name is None and xls.sheet_names:
+            sheet_name = xls.sheet_names[0]
+
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+
+        def row_text(row) -> str:
+            parts = []
+            for v in row:
+                if pd.notna(v):
+                    parts.append(str(v))
+            return ' '.join(parts).strip()
+
+        header_row = None
+        category_columns = {}
+        for i in range(min(20, len(df))):
+            row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+            found_categories = 0
+            for keyword_set in category_keywords:
+                keywords = keyword_set.upper().split(' ')
+                if any(kw.upper() in row_content for kw in keywords if len(kw) > 2):
+                    found_categories += 1
+            if found_categories > 0:
+                header_row = i
+                for col_idx, cell_value in enumerate(df.iloc[i]):
+                    if pd.notna(cell_value):
+                        cell_text = str(cell_value).upper().replace('Ё', 'Е')
+                        for keyword_set in category_keywords:
+                            keywords = keyword_set.upper().split(' ')
+                            if any(kw.upper() in cell_text for kw in keywords if len(kw) > 2):
+                                category_columns[col_idx] = keyword_set
+                                break
+                break
+
+        if header_row is None or not category_columns:
+            return []
+
+        dishes: List[DishItem] = []
+        for row_idx in range(header_row + 1, len(df)):
+            row = df.iloc[row_idx]
+            for col_idx, category in category_columns.items():
+                category_matches = False
+                for keyword_set in category_keywords:
+                    keywords = keyword_set.upper().split(' ')
+                    if any(kw.upper() in category.upper() for kw in keywords if len(kw) > 2):
+                        category_matches = True
+                        break
+                if not category_matches:
+                    continue
+                if col_idx < len(row) and pd.notna(row.iloc[col_idx]):
+                    dish_name = str(row.iloc[col_idx]).strip()
+                    if dish_name and not dish_name.isupper() and len(dish_name) > 3:
+                        weight = ""
+                        price = ""
+                        for offset in [1, 2, 3]:
+                            if col_idx + offset < len(row) and pd.notna(row.iloc[col_idx + offset]):
+                                cell_value = str(row.iloc[col_idx + offset]).strip()
+                                if not weight and re.search(r'\d+.*?(?:г|шт|мл|л)', cell_value, re.IGNORECASE):
+                                    weight = cell_value
+                                if not price and re.search(r'\d+', cell_value) and not re.search(r'(?:г|шт|мл|л)', cell_value):
+                                    if cell_value.isdigit():
+                                        price = f"{cell_value} руб."
+                                    else:
+                                        price = cell_value
+                        dishes.append(DishItem(name=dish_name, weight=weight, price=price))
+            if not any(pd.notna(cell) for cell in row):
+                break
+        return dishes
+    except Exception as e:
+        print(f"Ошибка при извлечении блюд категории {category_keywords}: {e}")
+        return []
+
+
+def extract_dishes_from_excel(excel_path: str, category_keywords: List[str]) -> List[DishItem]:
+    dishes = extract_dishes_from_excel_column(excel_path, category_keywords)
+    if dishes:
+        return dishes
+    return extract_dishes_from_excel_rows(excel_path, category_keywords)
+
+
+def extract_dishes_from_excel_rows(excel_path: str, category_keywords: List[str]) -> List[DishItem]:
+    try:
+        try:
+            xls = pd.ExcelFile(excel_path)
+            sheet_name = None
+            for nm in xls.sheet_names:
+                if 'касс' in str(nm).strip().lower():
+                    sheet_name = nm
+                    break
+            if sheet_name is None and xls.sheet_names:
+                sheet_name = xls.sheet_names[0]
+        except Exception:
+            sheet_name = 0
+
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+
+        def row_text(row) -> str:
+            parts = []
+            for v in row:
+                if pd.notna(v):
+                    parts.append(str(v))
+            return ' '.join(parts).strip()
+
+        category_row = None
+        for i in range(min(50, len(df))):
+            s = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+            if not s:
+                continue
+            for keyword_set in category_keywords:
+                keywords = keyword_set.upper().split(' ')
+                if any(kw.upper() in s for kw in keywords if len(kw) > 2):
+                    category_row = i
+                    break
+                elif all(kw.upper() in s for kw in keywords):
+                    category_row = i
+                    break
+            if category_row is not None:
+                break
+        if category_row is None:
+            return []
+
+        units_pattern = r'(?:к?кал|ккал|г|гр|грамм(?:а|ов)?|мл|л|кг)'
+        price_pattern = r'(?<!\\d)(\\d{1,6}(?:[\\.,]\\d{1,2})?)\\s*(?:руб\\w*|р\\.?|₽)?'
+
+        known_cats = [
+            'ЗАВТРАК', 'ПЕРВЫЕ БЛЮДА', 'ВТОРЫЕ БЛЮДА', 'ГАРНИР', 'НАПИТК', 'ДЕСЕРТ',
+            'БЛЮДА ИЗ МЯСА', 'БЛЮДА ИЗ ПТИЦЫ', 'БЛЮДА ИЗ РЫБЫ', 'САЛАТЫ', 'ХОЛОДНЫЕ ЗАКУСКИ',
+            'МЯСНЫЕ БЛЮДА', 'РЫБНЫЕ БЛЮДА', 'ГАРНИРЫ'
+        ]
+
+        def is_category_row(row) -> bool:
+            s = row_text(row).upper()
+            if not s:
+                return False
+            if any(k in s for k in known_cats):
+                return True
+            letters = ''.join(ch for ch in s if ch.isalpha())
+            if letters and letters == letters.upper() and len(letters) >= 4:
+                return True
+            return False
+
+        def extract_weight_from_row(row) -> str:
+            for v in row:
+                if pd.isna(v):
+                    continue
+                s = str(v)
+                m = re.search(rf'(\d+[\.,]?\d*)\s*{units_pattern}', s, flags=re.IGNORECASE)
+                if m:
+                    qty = m.group(1).replace(',', '.')
+                    unit_m = re.search(rf'{units_pattern}', s, flags=re.IGNORECASE)
+                    unit = unit_m.group(0) if unit_m else ''
+                    return f"{qty.replace('.', ',')} {unit}"
+            return ''
+
+        def is_weight_like(s: str) -> bool:
+            return re.search(rf'{units_pattern}', s, flags=re.IGNORECASE) is not None
+
+        def extract_price_from_row(row) -> Optional[str]:
+            candidates = []
+            for v in row:
+                if pd.isna(v):
+                    continue
+                s = str(v)
+                if is_weight_like(s):
+                    continue
+                for m in re.finditer(price_pattern, s, flags=re.IGNORECASE):
+                    num = m.group(1).replace(',', '.')
+                    try:
+                        val = float(num)
+                    except ValueError:
+                        continue
+                    candidates.append(val)
+            if not candidates:
+                return None
+            val = candidates[-1]
+            if abs(val - int(val)) < 1e-6:
+                txt = f"{int(val)} руб."
+            else:
+                txt = f"{str(val).replace('.', ',')} руб."
+            return txt
+
+        dishes: List[DishItem] = []
+        current_row = category_row + 1
+        empty_streak = 0
+        while current_row < len(df):
+            row = df.iloc[current_row]
+            s_join = row_text(row)
+            if is_category_row(row):
+                break
+            if not s_join:
+                empty_streak += 1
+                if empty_streak >= 3:
+                    break
+                current_row += 1
+                continue
+            else:
+                empty_streak = 0
+
+            name = ''
+            for v in row:
+                if pd.notna(v):
+                    t = str(v).strip()
+                    if t:
+                        name = t
+                        break
+            weight = extract_weight_from_row(row)
+            price = extract_price_from_row(row)
+            if name and not name.isupper():
+                dishes.append(DishItem(name=name, weight=weight, price=price or ""))
+            current_row += 1
+        return dishes
+    except Exception as e:
+        print(f"Ошибка при извлечении блюд категории {category_keywords}: {e}")
+        return []
+
+
+def extract_dishes_from_excel_rows_with_stop(excel_path: str, category_keywords: List[str], stop_keywords: List[str]) -> List[DishItem]:
+    try:
+        xls = pd.ExcelFile(excel_path)
+        sheet_name = None
+        for nm in xls.sheet_names:
+            if 'касс' in str(nm).strip().lower():
+                sheet_name = nm
+                break
+        if sheet_name is None and xls.sheet_names:
+            sheet_name = xls.sheet_names[0]
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+
+        def row_text(row) -> str:
+            parts = []
+            for v in row:
+                if pd.notna(v):
+                    parts.append(str(v))
+            return ' '.join(parts).strip()
+
+        header_row = None
+        for i in range(min(80, len(df))):
+            s = _upper_no_yo(row_text(df.iloc[i]))
+            if not s:
+                continue
+            for keyword_set in category_keywords:
+                keywords = _upper_no_yo(keyword_set).split(' ')
+                if any(kw and kw in s for kw in keywords if len(kw) > 2):
+                    header_row = i
+                    break
+            if header_row is not None:
+                break
+        if header_row is None:
+            return []
+
+        units_pattern = r'(?:к?кал|ккал|г|гр|грамм(?:а|ов)?|мл|л|кг)'
+        price_pattern = r'(?<!\\d)(\\d{1,6}(?:[\\.,]\\d{1,2})?)\\s*(?:руб\\w*|р\\.?|₽)?'
+
+        def is_category_row(row) -> bool:
+            s = _upper_no_yo(row_text(row))
+            if not s:
+                return False
+            letters = ''.join(ch for ch in s if ch.isalpha())
+            if letters and letters == letters.upper() and len(letters) >= 4:
+                return True
+            return False
+
+        def extract_weight_from_row(row) -> str:
+            for v in row:
+                if pd.isna(v):
+                    continue
+                s = str(v)
+                m = re.search(rf'(\\d+[\\.,]?\\d*)\\s*{units_pattern}', s, flags=re.IGNORECASE)
+                if m:
+                    qty = m.group(1).replace(',', '.')
+                    unit_m = re.search(rf'{units_pattern}', s, flags=re.IGNORECASE)
+                    unit = unit_m.group(0) if unit_m else ''
+                    return f"{qty.replace('.', ',')} {unit}"
+            return ''
+
+        def is_weight_like(s: str) -> bool:
+            return re.search(rf'{units_pattern}', s, flags=re.IGNORECASE) is not None
+
+        def extract_price_from_row(row) -> Optional[str]:
+            candidates = []
+            for v in row:
+                if pd.isna(v):
+                    continue
+                s = str(v)
+                if is_weight_like(s):
+                    continue
+                for m in re.finditer(price_pattern, s, flags=re.IGNORECASE):
+                    num = m.group(1).replace(',', '.')
+                    try:
+                        val = float(num)
+                    except ValueError:
+                        continue
+                    candidates.append(val)
+            if not candidates:
+                return None
+            val = candidates[-1]
+            if abs(val - int(val)) < 1e-6:
+                txt = f"{int(val)} руб."
+            else:
+                txt = f"{str(val).replace('.', ',')} руб."
+            return txt
+
+        dishes: List[DishItem] = []
+        current_row = header_row + 1
+        empty_streak = 0
+        stop_upper = [_upper_no_yo(x) for x in stop_keywords]
+        while current_row < len(df):
+            row = df.iloc[current_row]
+            s_join = row_text(row)
+            s_upper = _upper_no_yo(s_join)
+            if is_category_row(row) and any(st in s_upper for st in stop_upper):
+                break
+            if is_category_row(row) and s_join:
+                break
+            if not s_join:
+                empty_streak += 1
+                if empty_streak >= 3:
+                    break
+                current_row += 1
+                continue
+            else:
+                empty_streak = 0
+            name = ''
+            for v in row:
+                if pd.notna(v):
+                    t = str(v).strip()
+                    if t:
+                        name = t
+                        break
+            weight = extract_weight_from_row(row)
+            price = extract_price_from_row(row)
+            if name and not name.isupper():
+                dishes.append(DishItem(name=name, weight=weight, price=price or ""))
+            current_row += 1
+        return dishes
+    except Exception as e:
+        print(f"Ошибка при выборочном извлечении (до стоп-категории) {category_keywords}: {e}")
+        return []
+
+
+def extract_dishes_from_multiple_sheets(excel_path: str, sheet_names: List[str]) -> List[DishItem]:
+    all_dishes: List[DishItem] = []
+    try:
+        xls = pd.ExcelFile(excel_path)
+        for sheet_name in sheet_names:
+            if sheet_name in xls.sheet_names:
+                try:
+                    df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+                    for i in range(len(df)):
+                        for j in range(len(df.columns)):
+                            if pd.notna(df.iloc[i, j]):
+                                dish_name = str(df.iloc[i, j]).strip()
+                                if (dish_name and not dish_name.isupper() and len(dish_name) > 3 and not dish_name.replace(' ', '').isdigit()):
+                                    weight = ""
+                                    price = ""
+                                    for di in [-1, 0, 1]:
+                                        for dj in [1, 2, 3]:
+                                            try:
+                                                if (i + di >= 0 and j + dj < len(df.columns) and i + di < len(df) and pd.notna(df.iloc[i + di, j + dj])):
+                                                    cell_value = str(df.iloc[i + di, j + dj]).strip()
+                                                    if not weight and re.search(r'\d+.*?(?:г|шт|мл|л)', cell_value, re.IGNORECASE):
+                                                        weight = cell_value
+                                                    if not price and re.search(r'\d+', cell_value) and not re.search(r'(?:г|шт|мл|л)', cell_value):
+                                                        if cell_value.isdigit():
+                                                            price = f"{cell_value} руб."
+                                                        else:
+                                                            price = cell_value
+                                            except Exception:
+                                                continue
+                                    all_dishes.append(DishItem(name=dish_name, weight=weight, price=price))
+                except Exception as e:
+                    print(f"Ошибка при чтении листа {sheet_name}: {e}")
+    except Exception as e:
+        print(f"Ошибка при открытии файла: {e}")
+    return all_dishes
+
+
+def extract_salads_by_range(excel_path: str) -> List[DishItem]:
+    try:
+        xls = pd.ExcelFile(excel_path)
+        sheet_name = None
+        for nm in xls.sheet_names:
+            if 'касс' in str(nm).strip().lower():
+                sheet_name = nm
+                break
+        if sheet_name is None and xls.sheet_names:
+            sheet_name = xls.sheet_names[0]
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+
+        def row_text(row) -> str:
+            parts = []
+            for v in row:
+                if pd.notna(v):
+                    parts.append(str(v))
+            return ' '.join(parts).strip()
+
+        start_row = None
+        end_row = None
+        for i in range(len(df)):
+            row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+            if start_row is None:
+                if ('САЛАТ' in row_content and 'ХОЛОДН' in row_content and 'ЗАКУСК' in row_content) or \
+                   ('САЛАТЫ' in row_content and ('ХОЛОДНЫЕ' in row_content or 'ЗАКУСКИ' in row_content)):
+                    start_row = i
+                    print(f"Найден заголовок салатов в строке {i + 1}: {row_content}")
+                    continue
+            if start_row is not None and end_row is None:
+                if 'СЭНДВИЧ' in row_content:
+                    end_row = i
+                    print(f"Найден заголовок сэндвичей в строке {i + 1}: {row_content}")
+                    break
+        if start_row is None:
+            print("Заголовок 'САЛАТЫ И ХОЛОДНЫЕ ЗАКУСКИ' не найден")
+            return []
+        if end_row is None:
+            end_row = len(df)
+            for i in range(start_row + 1, len(df)):
+                row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+                if any(category in row_content for category in [
+                    'ПЕРВЫЕ БЛЮДА', 'ВТОРЫЕ БЛЮДА', 'ГОРЯЧИЕ БЛЮДА', 
+                    'МЯСНЫЕ БЛЮДА', 'РЫБНЫЕ БЛЮДА', 'ГАРНИРЫ', 'НАПИТКИ'
+                ]):
+                    end_row = i
+                    break
+        print(f"Обрабатываем салаты от строки {start_row + 1} до строки {end_row}")
+        dishes: List[DishItem] = []
+        for i in range(start_row + 1, end_row):
+            if i >= len(df):
+                break
+            row = df.iloc[i]
+            row_content = row_text(row)
+            if not row_content.strip():
+                continue
+            if row_content.isupper() and len(row_content) > 10:
+                continue
+            dish_name = ""
+            dish_weight = ""
+            dish_price = ""
+            for j, cell_value in enumerate(row):
+                if pd.notna(cell_value):
+                    cell_text = str(cell_value).strip()
+                    if not cell_text:
+                        continue
+                    if not dish_name and not cell_text.isupper() and len(cell_text) > 3:
+                        if not re.match(r'^\d+([.,]\d+)?\s*(руб|₽|р\.?)?$', cell_text) and \
+                           not re.search(r'\d+\s*(г|гр|мл|л|шт)', cell_text, re.IGNORECASE):
+                            dish_name = cell_text
+                            continue
+                    if not dish_weight and re.search(r'\d+.*?(г|гр|грамм|мл|л|кг|шт)', cell_text, re.IGNORECASE):
+                        dish_weight = cell_text
+                        continue
+                    if not dish_price and re.search(r'\d+', cell_text):
+                        if not re.search(r'г|гр|грамм|мл|л|кг|шт', cell_text, re.IGNORECASE):
+                            if cell_text.replace('.', '').replace(',', '').isdigit():
+                                dish_price = f"{cell_text} руб."
+                            elif re.search(r'\d+.*?(руб|₽|р\.?)', cell_text, re.IGNORECASE):
+                                dish_price = cell_text
+                            else:
+                                number_match = re.search(r'\d+([.,]\d+)?', cell_text)
+                                if number_match:
+                                    dish_price = f"{number_match.group()} руб."
+            if dish_name and len(dish_name) > 2:
+                dishes.append(DishItem(name=dish_name, weight=dish_weight, price=dish_price))
+                print(f"Найден салат: {dish_name} | {dish_weight} | {dish_price}")
+        print(f"Всего найдено салатов: {len(dishes)}")
+        return dishes
+    except Exception as e:
+        print(f"Ошибка при извлечении салатов по диапазону: {e}")
+        return []
+
+
+def extract_salads_from_excel(excel_path: str) -> List[DishItem]:
+    try:
+        salads = extract_salads_by_range(excel_path)
+        if salads:
+            return salads
+        return extract_dishes_from_multiple_sheets(excel_path, ['Хц', 'Холодные', 'Салаты', 'касса '])
+    except Exception as e:
+        print(f"Ошибка при извлечении салатов: {e}")
+        return []
+
+
+def extract_first_courses_by_range(excel_path: str) -> List[DishItem]:
+    try:
+        xls = pd.ExcelFile(excel_path)
+        sheet_name = None
+        for nm in xls.sheet_names:
+            if 'касс' in str(nm).strip().lower():
+                sheet_name = nm
+                break
+        if sheet_name is None and xls.sheet_names:
+            sheet_name = xls.sheet_names[0]
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+
+        def row_text(row) -> str:
+            parts = []
+            for v in row:
+                if pd.notna(v):
+                    parts.append(str(v))
+            return ' '.join(parts).strip()
+
+        start_row = None
+        end_row = None
+        for i in range(len(df)):
+            row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+            if start_row is None:
+                if 'ПЕРВЫЕ БЛЮДА' in row_content or ('ПЕРВЫЕ' in row_content and 'БЛЮДА' in row_content):
+                    start_row = i
+                    print(f"Найден заголовок первых блюд в строке {i + 1}: {row_content}")
+                    continue
+            if start_row is not None and end_row is None:
+                if any(category in row_content for category in [
+                    'САЛАТЫ', 'ХОЛОДНЫЕ ЗАКУСКИ', 'БЛЮДА ИЗ МЯСА', 'МЯСНЫЕ',
+                    'БЛЮДА ИЗ ПТИЦЫ', 'ПТИЦ', 'БЛЮДА ИЗ РЫБЫ', 'РЫБНЫЕ',
+                    'ГАРНИРЫ', 'НАПИТКИ', 'ДЕСЕРТЫ', 'ВТОРЫЕ БЛЮДА'
+                ]):
+                    end_row = i
+                    print(f"Найден конец секции первых блюд в строке {i + 1}: {row_content}")
+                    break
+        if start_row is None:
+            print("Заголовок 'ПЕРВЫЕ БЛЮДА' не найден")
+            return []
+        if end_row is None:
+            end_row = min(start_row + 50, len(df))
+        print(f"Обрабатываем первые блюда от строки {start_row + 1} до строки {end_row}")
+        dishes: List[DishItem] = []
+        for i in range(start_row + 1, end_row):
+            if i >= len(df):
+                break
+            row = df.iloc[i]
+            row_content = row_text(row)
+            if not row_content.strip():
+                continue
+            if row_content.isupper() and len(row_content) > 10:
+                continue
+            dish_name = ""
+            dish_weight = ""
+            dish_price = ""
+            if len(df.columns) > 4 and pd.notna(df.iloc[i, 4]):
+                name_text = str(df.iloc[i, 4]).strip()
+                if name_text and not name_text.isupper() and len(name_text) > 2:
+                    dish_name = name_text
+            if not dish_name:
+                continue
+            if len(df.columns) > 5 and pd.notna(df.iloc[i, 5]):
+                weight_text = str(df.iloc[i, 5]).strip()
+                if weight_text:
+                    dish_weight = weight_text
+            if len(df.columns) > 6 and pd.notna(df.iloc[i, 6]):
+                price_text = str(df.iloc[i, 6]).strip()
+                if price_text:
+                    if price_text.replace('.', '').replace(',', '').isdigit():
+                        dish_price = f"{price_text} руб."
+                    else:
+                        dish_price = price_text
+            if dish_name and len(dish_name) > 2:
+                dishes.append(DishItem(name=dish_name, weight=dish_weight, price=dish_price))
+                print(f"Найдено первое блюдо: {dish_name} | {dish_weight} | {dish_price}")
+        print(f"Всего найдено первых блюд: {len(dishes)}")
+        return dishes
+    except Exception as e:
+        print(f"Ошибка при извлечении первых блюд по диапазону: {e}")
+        return []
+
+
+def extract_first_courses_from_excel(excel_path: str) -> List[DishItem]:
+    try:
+        dishes = extract_first_courses_by_range(excel_path)
+        if dishes:
+            return dishes
+        print("Поиск первых блюд через общую функцию...")
+        keywords = ['ПЕРВЫЕ БЛЮДА', 'ПЕРВЫЕ']
+        all_dishes = extract_dishes_from_excel(excel_path, keywords)
+        print(f"Найдено {len(all_dishes)} первых блюд")
+        return all_dishes
+    except Exception as e:
+        print(f"Ошибка при извлечении первых блюд: {e}")
+        return []
+
+
+def extract_meat_dishes_by_range(excel_path: str) -> List[DishItem]:
+    try:
+        xls = pd.ExcelFile(excel_path)
+        sheet_name = None
+        for nm in xls.sheet_names:
+            if 'касс' in str(nm).strip().lower():
+                sheet_name = nm
+                break
+        if sheet_name is None and xls.sheet_names:
+            sheet_name = xls.sheet_names[0]
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+
+        def row_text(row) -> str:
+            parts = []
+            for v in row:
+                if pd.notna(v):
+                    parts.append(str(v))
+            return ' '.join(parts).strip()
+
+        start_row = None
+        end_row = None
+        for i in range(len(df)):
+            row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+            if start_row is None:
+                if 'БЛЮДА ИЗ МЯСА' in row_content or 'МЯСНЫЕ БЛЮДА' in row_content:
+                    start_row = i
+                    print(f"Найден заголовок мясных блюд в строке {i + 1}: {row_content}")
+                    continue
+            if start_row is not None and end_row is None:
+                if 'БЛЮДА ИЗ ПТИЦЫ' in row_content or ('ПТИЦ' in row_content and 'БЛЮДА' in row_content):
+                    end_row = i
+                    print(f"Найден заголовок блюд из птицы в строке {i + 1}: {row_content}")
+                    break
+        if start_row is None:
+            print("Заголовок 'БЛЮДА ИЗ МЯСА' не найден")
+            return []
+        if end_row is None:
+            end_row = len(df)
+            for i in range(start_row + 1, len(df)):
+                row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+                if any(category in row_content for category in [
+                    'РЫБНЫЕ БЛЮДА', 'БЛЮДА ИЗ РЫБЫ', 'ГАРНИРЫ', 'НАПИТКИ', 
+                    'ДЕСЕРТЫ', 'САЛАТЫ', 'СЭНДВИЧ'
+                ]):
+                    end_row = i
+                    break
+        print(f"Обрабатываем мясные блюда от строки {start_row + 1} до строки {end_row}")
+        dishes: List[DishItem] = []
+        for i in range(start_row + 1, end_row):
+            if i >= len(df):
+                break
+            row = df.iloc[i]
+            row_content = row_text(row)
+            if not row_content.strip():
+                continue
+            if row_content.isupper() and len(row_content) > 10:
+                continue
+            dish_name = ""
+            dish_weight = ""
+            dish_price = ""
+            if len(df.columns) > 4 and pd.notna(df.iloc[i, 4]):
+                name_text = str(df.iloc[i, 4]).strip()
+                if name_text and not name_text.isupper() and len(name_text) > 2:
+                    dish_name = name_text
+            if not dish_name:
+                continue
+            if len(df.columns) > 5 and pd.notna(df.iloc[i, 5]):
+                weight_text = str(df.iloc[i, 5]).strip()
+                if weight_text:
+                    dish_weight = weight_text
+            if len(df.columns) > 6 and pd.notna(df.iloc[i, 6]):
+                price_text = str(df.iloc[i, 6]).strip()
+                if price_text:
+                    if price_text.replace('.', '').replace(',', '').isdigit():
+                        dish_price = f"{price_text} руб."
+                    else:
+                        dish_price = price_text
+            if dish_name and len(dish_name) > 2:
+                dishes.append(DishItem(name=dish_name, weight=dish_weight, price=dish_price))
+                print(f"Найдено блюдо из мяса: {dish_name} | {dish_weight} | {dish_price}")
+        print(f"Всего найдено мясных блюд: {len(dishes)}")
+        return dishes
+    except Exception as e:
+        print(f"Ошибка при извлечении мясных блюд по диапазону: {e}")
+        return []
+
+
+def extract_meat_dishes_from_excel(excel_path: str) -> List[DishItem]:
+    try:
+        dishes = extract_meat_dishes_by_range(excel_path)
+        if dishes:
+            return dishes
+        stop_keywords = ['БЛЮДА ИЗ ПТИЦЫ', 'ПТИЦА', 'РЫБНЫЕ БЛЮДА', 'БЛЮДА ИЗ РЫБЫ']
+        keywords = ['БЛЮДА ИЗ МЯСА', 'МЯСНЫЕ БЛЮДА', 'МЯСО']
+        dishes = extract_dishes_from_excel_rows_with_stop(excel_path, keywords, stop_keywords)
+        if dishes:
+            print(f"Найдено {len(dishes)} мясных блюд через построчный поиск с остановкой")
+            return dishes
+        print("Поиск мясных блюд через колоночную структуру...")
+        all_keywords = ['БЛЮДА ИЗ МЯСА', 'МЯСНЫЕ БЛЮДА', 'МЯСО']
+        dishes = extract_dishes_from_excel(excel_path, all_keywords)
+        if dishes:
+            filtered_dishes: List[DishItem] = []
+            for dish in dishes:
+                if not any(soup_word in dish.name.lower() for soup_word in ['суп', 'бульон', 'солянка', 'борщ', 'щи', 'окрошка', 'харчо']):
+                    filtered_dishes.append(dish)
+            if filtered_dishes:
+                return filtered_dishes
+        return []
+    except Exception as e:
+        print(f"Ошибка при извлечении мясных блюд: {e}")
+        return []
+
+
+def extract_poultry_dishes_by_range(excel_path: str) -> List[DishItem]:
+    try:
+        xls = pd.ExcelFile(excel_path)
+        sheet_name = None
+        for nm in xls.sheet_names:
+            if 'касс' in str(nm).strip().lower():
+                sheet_name = nm
+                break
+        if sheet_name is None and xls.sheet_names:
+            sheet_name = xls.sheet_names[0]
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+        print(f"Размер файла: {len(df)} строк, {len(df.columns)} столбцов")
+
+        def row_text(row) -> str:
+            parts = []
+            for v in row:
+                if pd.notna(v):
+                    parts.append(str(v))
+            return ' '.join(parts).strip()
+
+        if len(df.columns) <= 6:
+            name_col, weight_col, price_col = 3, 4, 5
+            print("Определена структура с 6 столбцами: D(название), E(вес), F(цена)")
+        else:
+            name_col, weight_col, price_col = 4, 5, 6
+            print("Определена структура с 7+ столбцами: E(название), F(вес), G(цена)")
+
+        start_row = None
+        end_row = None
+        for i in range(len(df)):
+            row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+            if start_row is None:
+                if 'БЛЮДА ИЗ ПТИЦЫ' in row_content or ('ПТИЦ' in row_content and 'БЛЮДА' in row_content):
+                    start_row = i
+                    print(f"Найден заголовок блюд из птицы в строке {i + 1}: {row_content}")
+                    continue
+            if start_row is not None and end_row is None:
+                if 'БЛЮДА ИЗ РЫБЫ' in row_content or ('РЫБ' in row_content and 'БЛЮДА' in row_content):
+                    end_row = i
+                    print(f"Найден заголовок блюд из рыбы в строке {i + 1}: {row_content}")
+                    break
+        if start_row is None:
+            print("Заголовок 'БЛЮДА ИЗ ПТИЦЫ' не найден")
+            return []
+        if end_row is None:
+            end_row = len(df)
+            for i in range(start_row + 1, len(df)):
+                row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+                if any(category in row_content for category in ['ГАРНИРЫ', 'НАПИТКИ', 'ДЕСЕРТЫ', 'САЛАТЫ', 'СЭНДВИЧ']):
+                    end_row = i
+                    break
+        print(f"Обрабатываем блюда из птицы от строки {start_row + 1} до строки {end_row}")
+        print(f"Используем столбцы: {chr(65+name_col)}(название), {chr(65+weight_col)}(вес), {chr(65+price_col)}(цена)")
+        dishes: List[DishItem] = []
+        for i in range(start_row + 1, end_row):
+            if i >= len(df):
+                break
+            row = df.iloc[i]
+            row_content = row_text(row)
+            if not row_content.strip():
+                continue
+            if row_content.isupper() and len(row_content) > 10:
+                continue
+            dish_name = ""
+            dish_weight = ""
+            dish_price = ""
+            if len(df.columns) > name_col and pd.notna(df.iloc[i, name_col]):
+                name_text = str(df.iloc[i, name_col]).strip()
+                if (name_text and not name_text.isupper() and len(name_text) > 2 and 'БЛЮДА ИЗ' not in name_text.upper()):
+                    dish_name = name_text
+            if not dish_name:
+                continue
+            if len(df.columns) > weight_col and pd.notna(df.iloc[i, weight_col]):
+                weight_text = str(df.iloc[i, weight_col]).strip()
+                if weight_text:
+                    dish_weight = weight_text
+            if len(df.columns) > price_col and pd.notna(df.iloc[i, price_col]):
+                price_text = str(df.iloc[i, price_col]).strip()
+                if price_text:
+                    if price_text.replace('.', '').replace(',', '').isdigit():
+                        dish_price = f"{price_text} руб."
+                    else:
+                        dish_price = price_text
+            if dish_name and len(dish_name) > 2:
+                dishes.append(DishItem(name=dish_name, weight=dish_weight, price=dish_price))
+                print(f"Найдено блюдо из птицы: {dish_name} | {dish_weight} | {dish_price}")
+        print(f"Всего найдено блюд из птицы: {len(dishes)}")
+        return dishes
+    except Exception as e:
+        print(f"Ошибка при извлечении блюд из птицы по диапазону: {e}")
+        return []
+
+
+def extract_poultry_dishes_from_excel(excel_path: str) -> List[DishItem]:
+    try:
+        dishes = extract_poultry_dishes_by_range(excel_path)
+        if dishes:
+            return dishes
+        print("Поиск блюд из птицы через листы...")
+        return extract_dishes_from_multiple_sheets(excel_path, ['Раздача', 'Обед', 'Гц', 'Птица', 'касса '])
+    except Exception as e:
+        print(f"Ошибка при извлечении блюд из птицы: {e}")
+        return []
+
+
+def extract_fish_dishes_by_range(excel_path: str) -> List[DishItem]:
+    try:
+        xls = pd.ExcelFile(excel_path)
+        sheet_name = None
+        for nm in xls.sheet_names:
+            if 'обед' in str(nm).strip().lower():
+                sheet_name = nm
+                break
+        if sheet_name is None:
+            for nm in xls.sheet_names:
+                if 'касс' in str(nm).strip().lower():
+                    sheet_name = nm
+                    break
+        if sheet_name is None and xls.sheet_names:
+            sheet_name = xls.sheet_names[0]
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+        print(f"Используем лист: {sheet_name}")
+        print(f"Размер листа: {len(df)} строк, {len(df.columns)} столбцов")
+
+        def row_text(row) -> str:
+            parts = []
+            for v in row:
+                if pd.notna(v):
+                    parts.append(str(v))
+            return ' '.join(parts).strip()
+
+        start_row = None
+        end_row = None
+        for i in range(len(df)):
+            row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+            if start_row is None:
+                if 'БЛЮДА ИЗ РЫБЫ' in row_content or 'РЫБНЫЕ БЛЮДА' in row_content:
+                    start_row = i
+                    print(f"Найден заголовок рыбных блюд в строке {i + 1}: {row_content}")
+                    continue
+            if start_row is not None and end_row is None:
+                if any(category in row_content for category in ['ГАРНИРЫ']):
+                    end_row = i
+                    print(f"Найден конец секции рыбных блюд в строке {i + 1}: {row_content}")
+                    break
+        if start_row is None:
+            print("Заголовок 'БЛЮДА ИЗ РЫБЫ' не найден")
+            return []
+        if end_row is None:
+            end_row = min(start_row + 50, len(df))
+        print(f"Обрабатываем рыбные блюда от строки {start_row + 1} до строки {end_row}")
+        dishes: List[DishItem] = []
+        for i in range(start_row + 1, end_row):
+            if i >= len(df):
+                break
+            row = df.iloc[i]
+            row_content = row_text(row)
+            if not row_content.strip():
+                continue
+            if row_content.isupper() and len(row_content) > 10:
+                continue
+            dish_name = ""
+            dish_weight = ""
+            dish_price = ""
+            if len(df.columns) > 4 and pd.notna(df.iloc[i, 4]):
+                name_text = str(df.iloc[i, 4]).strip()
+                if name_text and not name_text.isupper() and len(name_text) > 2:
+                    dish_name = name_text
+            if not dish_name:
+                continue
+            if len(df.columns) > 5 and pd.notna(df.iloc[i, 5]):
+                weight_text = str(df.iloc[i, 5]).strip()
+                if weight_text:
+                    dish_weight = weight_text
+            if len(df.columns) > 6 and pd.notna(df.iloc[i, 6]):
+                price_text = str(df.iloc[i, 6]).strip()
+                if price_text:
+                    if price_text.replace('.', '').replace(',', '').isdigit():
+                        dish_price = f"{price_text} руб."
+                    else:
+                        dish_price = price_text
+            if dish_name and len(dish_name) > 2:
+                dishes.append(DishItem(name=dish_name, weight=dish_weight, price=dish_price))
+                print(f"Найдено блюдо из рыбы: {dish_name} | {dish_weight} | {dish_price}")
+        print(f"Всего найдено рыбных блюд: {len(dishes)}")
+        return dishes
+    except Exception as e:
+        print(f"Ошибка при извлечении рыбных блюд по диапазону: {e}")
+        return []
+
+
+def extract_fish_dishes_from_excel(excel_path: str) -> List[DishItem]:
+    try:
+        dishes = extract_fish_dishes_by_range(excel_path)
+        if dishes:
+            return dishes
+        print("Поиск блюд из рыбы через листы...")
+        return extract_dishes_from_multiple_sheets(excel_path, ['Обед', 'Гц', 'Рыба', 'касса '])
+    except Exception as e:
+        print(f"Ошибка при извлечении блюд из рыбы: {e}")
+        return []
+
+
+def extract_side_dishes_by_range(excel_path: str) -> List[DishItem]:
+    try:
+        xls = pd.ExcelFile(excel_path)
+        sheet_name = None
+        for nm in xls.sheet_names:
+            if 'касс' in str(nm).strip().lower():
+                sheet_name = nm
+                break
+        if sheet_name is None and xls.sheet_names:
+            sheet_name = xls.sheet_names[0]
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+        print(f"Размер файла: {len(df)} строк, {len(df.columns)} столбцов")
+
+        def row_text(row) -> str:
+            parts = []
+            for v in row:
+                if pd.notna(v):
+                    parts.append(str(v))
+            return ' '.join(parts).strip()
+
+        gourmet_column = None
+        start_row = None
+        end_row = None
+        for i in range(len(df)):
+            row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+            if start_row is None:
+                if 'ГАРНИРЫ' in row_content or 'ГАРНИР' in row_content:
+                    start_row = i
+                    print(f"Найден заголовок гарниров в строке {i + 1}: {row_content}")
+                    for col_idx in range(len(df.columns)):
+                        if pd.notna(df.iloc[i, col_idx]):
+                            cell_content = str(df.iloc[i, col_idx]).upper().replace('Ё', 'Е')
+                            if 'ГАРНИР' in cell_content:
+                                gourmet_column = col_idx
+                                print(f"Заголовок гарниров найден в столбце {chr(65 + col_idx)}")
+                                break
+                    continue
+            if start_row is not None and end_row is None:
+                if any(category in row_content for category in [
+                    'НАПИТКИ', 'ДЕСЕРТЫ', 'САЛАТЫ', 'СЭНДВИЧ', 'ЗАКУСКИ',
+                    'ПЕРВЫЕ БЛЮДА', 'ВТОРЫЕ БЛЮДА', 'БЛЮДА ИЗ', 'ВЫПЕЧКА'
+                ]):
+                    end_row = i
+                    print(f"Найден конец секции гарниров в строке {i + 1}: {row_content}")
+                    break
+        if start_row is None:
+            print("Заголовок 'ГАРНИРЫ' не найден")
+            return []
+        if end_row is None:
+            end_row = min(start_row + 30, len(df))
+        if gourmet_column is not None:
+            if gourmet_column == 3:
+                name_col, weight_col, price_col = 0, 1, 2
+                print("Определена структура: гарниры в левой части A(название), B(вес), C(цена)")
+            else:
+                name_col, weight_col, price_col = 4, 5, 6
+                print("Определена структура: гарниры в правой части E(название), F(вес), G(цена)")
+        else:
+            if len(df.columns) <= 6:
+                name_col, weight_col, price_col = 0, 1, 2
+                print("Определена структура по умолчанию для 6-столбцов: A(название), B(вес), C(цена)")
+            else:
+                name_col, weight_col, price_col = 4, 5, 6
+                print("Определена структура по умолчанию для 7+-столбцов: E(название), F(вес), G(цена)")
+        print(f"Обрабатываем гарниры от строки {start_row + 1} до строки {end_row}")
+        print(f"Используем столбцы: {chr(65+name_col)}(название), {chr(65+weight_col)}(вес), {chr(65+price_col)}(цена)")
+        dishes: List[DishItem] = []
+        for i in range(start_row + 1, end_row):
+            if i >= len(df):
+                break
+            row = df.iloc[i]
+            row_content = row_text(row)
+            if not row_content.strip():
+                continue
+            if row_content.isupper() and len(row_content) > 10:
+                continue
+            dish_name = ""
+            dish_weight = ""
+            dish_price = ""
+            if len(df.columns) > name_col and pd.notna(df.iloc[i, name_col]):
+                name_text = str(df.iloc[i, name_col]).strip()
+                if (name_text and not name_text.isupper() and len(name_text) > 2 and
+                    'ГАРНИР' not in name_text.upper() and 
+                    not re.match(r'^\d+.*?(г|мл|л|шт)', name_text) and
+                    not name_text.replace('.', '').replace(',', '').isdigit()):
+                    dish_name = name_text
+            if not dish_name:
+                continue
+            if len(df.columns) > weight_col and pd.notna(df.iloc[i, weight_col]):
+                weight_text = str(df.iloc[i, weight_col]).strip()
+                if weight_text:
+                    dish_weight = weight_text
+            if len(df.columns) > price_col and pd.notna(df.iloc[i, price_col]):
+                price_text = str(df.iloc[i, price_col]).strip()
+                if price_text:
+                    if price_text.replace('.', '').replace(',', '').isdigit():
+                        dish_price = f"{price_text} руб."
+                    else:
+                        dish_price = price_text
+            if dish_name and len(dish_name) > 2:
+                dishes.append(DishItem(name=dish_name, weight=dish_weight, price=dish_price))
+                print(f"Найден гарнир: {dish_name} | {dish_weight} | {dish_price}")
+        print(f"Всего найдено гарниров: {len(dishes)}")
+        return dishes
+    except Exception as e:
+        print(f"Ошибка при извлечении гарниров по диапазону: {e}")
+        return []
+
+
+def extract_side_dishes_from_excel(excel_path: str) -> List[DishItem]:
+    try:
+        dishes = extract_side_dishes_by_range(excel_path)
+        if dishes:
+            return dishes
+        print("Поиск гарниров через общую функцию...")
+        keywords = ['ГАРНИРЫ', 'ГАРНИР']
+        dishes = extract_dishes_from_excel(excel_path, keywords)
+        if dishes:
+            print(f"Найдено {len(dishes)} гарниров через общую функцию")
+            return dishes
+        print("Последняя попытка - поиск гарниров через листы...")
+        return extract_dishes_from_multiple_sheets(excel_path, ['Раздача', 'Обед', 'Гц', 'Гарниры', 'касса '])
+    except Exception as e:
+        print(f"Ошибка при извлечении гарниров: {e}")
+        return []
+
+
+def extract_fish_dishes_from_column_e(excel_path: str) -> List[DishItem]:
+    try:
+        xls = pd.ExcelFile(excel_path)
+        sheet_name = None
+        for nm in xls.sheet_names:
+            if 'касс' in str(nm).strip().lower():
+                sheet_name = nm
+                break
+        if sheet_name is None and xls.sheet_names:
+            sheet_name = xls.sheet_names[0]
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+
+        def row_text(row) -> str:
+            parts = []
+            for v in row:
+                if pd.notna(v):
+                    parts.append(str(v))
+            return ' '.join(parts).strip()
+
+        start_row = None
+        end_row = None
+        fish_columns = None
+        for i in range(len(df)):
+            row_content = row_text(df.iloc[i]).upper().replace('Ё', 'Е')
+            if start_row is None:
+                if 'БЛЮДА ИЗ РЫБЫ' in row_content or ('РЫБН' in row_content and 'БЛЮДА' in row_content):
+                    start_row = i
+                    print(f"Найден заголовок рыбных блюд в строке {i + 1}: {row_content}")
+                    for col_idx in range(len(df.columns)):
+                        if pd.notna(df.iloc[i, col_idx]):
+                            cell_content = str(df.iloc[i, col_idx]).upper().replace('Ё', 'Е')
+                            if 'БЛЮДА ИЗ РЫБЫ' in cell_content or ('РЫБН' in cell_content and 'БЛЮДА' in cell_content):
+                                fish_columns = [col_idx, col_idx + 1, col_idx + 2] if col_idx + 2 < len(df.columns) else [col_idx]
+                                print(f"Рыбные блюда находятся в столбцах: {fish_columns}")
+                                break
+                    continue
+            if start_row is not None and end_row is None:
+                if 'ГАРНИРЫ' in row_content or 'ГАРНИР' in row_content:
+                    end_row = i
+                    print(f"Найден заголовок гарниров в строке {i + 1}: {row_content}")
+                    print(f"Останавливаемся на гарнирах, не включая их")
+                    break
+                if any(category in row_content for category in [
+                    'НАПИТКИ', 'ДЕСЕРТЫ', 'САЛАТЫ', 'СЭНДВИЧ', 'ЗАКУСКИ',
+                    'ПЕРВЫЕ БЛЮДА', 'ВТОРЫЕ БЛЮДА', 'ВЫПЕЧКА', 'ХЛЕБ'
+                ]):
+                    end_row = i
+                    print(f"Найден конец секции в строке {i + 1}: {row_content}")
+                    break
+        if start_row is None or fish_columns is None:
+            print("Заголовок 'БЛЮДА ИЗ РЫБЫ' не найден или не удалось определить столбцы")
+            return []
+        if end_row is None:
+            end_row = min(start_row + 100, len(df))
+        print(f"Извлекаем данные от строки {start_row + 1} до строки {end_row}")
+        dishes: List[DishItem] = []
+        for i in range(start_row + 1, end_row):
+            if i >= len(df):
+                break
+            row = df.iloc[i]
+            row_content = row_text(row)
+            if not row_content.strip():
+                continue
+            if row_content.isupper() and len(row_content) > 10:
+                continue
+            dish_name = ""
+            dish_weight = ""
+            dish_price = ""
+            row_values = []
+            for col_idx in fish_columns:
+                if col_idx < len(df.columns) and pd.notna(df.iloc[i, col_idx]):
+                    cell_text = str(df.iloc[i, col_idx]).strip()
+                    if cell_text:
+                        row_values.append(cell_text)
+            if not row_values:
+                continue
+            if row_values:
+                potential_name = row_values[0]
+                if (not potential_name.isupper() and len(potential_name) > 2 and
+                    not re.match(r'^\d+([.,]\d+)?\s*(руб|₽|р\.?)?$', potential_name) and
+                    not re.search(r'\d+\s*(г|гр|грамм|мл|л|кг|шт)', potential_name, re.IGNORECASE)):
+                    dish_name = potential_name
+            if not dish_name:
+                continue
+            for value in row_values[1:]:
+                if not dish_weight and re.search(r'\d+.*?(г|гр|грамм|мл|л|кг|шт)', value, re.IGNORECASE):
+                    dish_weight = value
+                    continue
+                if not dish_price and re.search(r'\d+', value):
+                    if not re.search(r'г|гр|грамм|мл|л|кг|шт', value, re.IGNORECASE):
+                        if value.replace('.', '').replace(',', '').isdigit():
+                            dish_price = f"{value} руб."
+                        elif re.search(r'\d+.*?(руб|₽|р\.?)', value, re.IGNORECASE):
+                            dish_price = value
+                        else:
+                            number_match = re.search(r'\d+([.,]\d+)?', value)
+                            if number_match:
+                                dish_price = f"{number_match.group()} руб."
+            if dish_name and len(dish_name) > 2:
+                dishes.append(DishItem(name=dish_name, weight=dish_weight, price=dish_price))
+                print(f"Найдено блюдо: {dish_name} | {dish_weight} | {dish_price}")
+        print(f"Всего найдено рыбных блюд: {len(dishes)}")
+        return dishes
+    except Exception as e:
+        print(f"Ошибка при извлечении рыбных блюд из столбца E: {e}")
+        return []
