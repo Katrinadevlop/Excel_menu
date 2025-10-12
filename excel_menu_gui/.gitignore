@@ -5,3 +5,7 @@ dist/
 *.exe
 __pycache__/
 *.pyc
+.idea/
+breakfast_only.xlsx
+filled_*.xlsx
+test_*.xlsx

@@ -5,3 +5,4 @@ xlwings
 python-pptx>=0.6.21
 PyInstaller>=5.0
 Pillow>=9.0.0
+pandas>=1.5.0
