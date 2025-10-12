@@ -5,7 +5,7 @@ import winreg
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QPalette, QColor
 from PySide6.QtWidgets import QApplication
-from ui_styles import ThemeAwareStyles
+from app.gui.ui_styles import ThemeAwareStyles
 
 
 class ThemeMode(enum.Enum):

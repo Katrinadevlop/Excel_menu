@@ -11,8 +11,8 @@ from pathlib import Path
 # Добавляем текущую директорию в PATH
 sys.path.insert(0, str(Path(__file__).parent))
 
-from comparator import (
-    _extract_dishes_from_both_columns, 
+from app.services.comparator import (
+    _extract_dishes_from_both_columns,
     _find_category_ranges,
     normalize_dish,
     col_to_index0

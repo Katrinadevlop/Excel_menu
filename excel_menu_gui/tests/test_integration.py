@@ -14,8 +14,8 @@ from unittest.mock import patch, MagicMock
 
 import openpyxl
 
-from brokerage_journal import BrokerageJournalGenerator, create_brokerage_journal_from_menu
-from menu_template_filler import MenuTemplateFiller, fill_menu_template_from_source
+from app.reports.brokerage_journal import BrokerageJournalGenerator, create_brokerage_journal_from_menu
+from app.services.menu_template_filler import MenuTemplateFiller, fill_menu_template_from_source
 
 
 class TestBrokerageJournalIntegration(unittest.TestCase):

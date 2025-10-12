@@ -13,14 +13,14 @@ from PySide6.QtWidgets import (
     QGroupBox, QCheckBox, QSpinBox, QRadioButton, QButtonGroup, QMessageBox, QFrame, QSizePolicy, QScrollArea,
 )
 
-from comparator import compare_and_highlight, get_sheet_names, ColumnParseError
-from template_linker import default_template_path
-from theme import ThemeMode, apply_theme, start_system_theme_watcher
-from presentation_handler import create_presentation_with_excel_data
-from brokerage_journal import create_brokerage_journal_from_menu
-from menu_template_filler import MenuTemplateFiller
-from ui_styles import (
-    AppStyles, ButtonStyles, LayoutStyles, StyleSheets, ComponentStyles, 
+from app.services.comparator import compare_and_highlight, get_sheet_names, ColumnParseError
+from app.services.template_linker import default_template_path
+from app.gui.theme import ThemeMode, apply_theme, start_system_theme_watcher
+from app.reports.presentation_handler import create_presentation_with_excel_data
+from app.reports.brokerage_journal import create_brokerage_journal_from_menu
+from app.services.menu_template_filler import MenuTemplateFiller
+from app.gui.ui_styles import (
+    AppStyles, ButtonStyles, LayoutStyles, StyleSheets, ComponentStyles,
     StyleManager, ThemeAwareStyles
 )
 

@@ -12,8 +12,8 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import re
 
-from dish_extractor import extract_categorized_dishes_from_menu, extract_date_from_menu
-from comparator import _find_category_ranges, _extract_dishes_from_multiple_columns, read_cell_values, normalize_dish
+from app.services.dish_extractor import extract_categorized_dishes_from_menu, extract_date_from_menu
+from app.services.comparator import _find_category_ranges, _extract_dishes_from_multiple_columns, read_cell_values, normalize_dish
 
 
 class MenuTemplateFiller:
@@ -39,7 +39,7 @@ class MenuTemplateFiller:
         """Улучшенное извлечение блюд по категориям используя логику из comparator.py"""
         try:
             # Определяем какой лист использовать
-            from comparator import get_sheet_names
+            from app.services.comparator import get_sheet_names
             sheets = get_sheet_names(menu_path)
             if not sheets:
                 return {}

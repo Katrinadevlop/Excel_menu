@@ -6,7 +6,7 @@ from datetime import datetime
 import re
 from typing import List, Dict, Optional, Tuple
 
-from dish_extractor import extract_categorized_dishes_from_menu, extract_date_from_menu
+from app.services.dish_extractor import extract_categorized_dishes_from_menu, extract_date_from_menu
 
 class BrokerageJournalGenerator:
     """Генератор бракеражного журнала на основе меню"""

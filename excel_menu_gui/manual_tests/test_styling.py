@@ -7,8 +7,8 @@ import sys
 from PySide6.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QWidget, QLabel
 from PySide6.QtCore import Qt
 
-from ui_styles import (
-    AppStyles, StyleManager, ButtonStyles, ComponentStyles, 
+from app.gui.ui_styles import (
+    AppStyles, StyleManager, ButtonStyles, ComponentStyles,
     LayoutStyles, StyleSheets
 )
 

@@ -15,7 +15,7 @@ from unittest.mock import patch, MagicMock
 import pandas as pd
 import openpyxl
 
-from dish_extractor import (
+from app.services.dish_extractor import (
     DishItem, ExtractionResult, ExcelDataSource, DishExtractorService,
     extract_categorized_dishes_from_menu, extract_date_from_menu,
     DishExtractionError, FileFormatError
@@ -157,7 +157,7 @@ class TestDishExtractorService(unittest.TestCase):
         with self.assertRaises(FileFormatError):
             self.service._detect_source_type("test.txt")
     
-    @patch('dish_extractor.ExcelDataSource')
+    @patch('app.services.dish_extractor.ExcelDataSource')
     def test_extract_dishes_with_auto_type(self, mock_excel_source):
         """Тест извлечения блюд с автоопределением типа"""
         # Мокаем источник данных
@@ -190,7 +190,7 @@ class TestDishExtractorService(unittest.TestCase):
 class TestPublicFunctions(unittest.TestCase):
     """Тесты для публичных функций"""
     
-    @patch('dish_extractor._extractor_service')
+    @patch('app.services.dish_extractor._extractor_service')
     def test_extract_categorized_dishes_from_menu(self, mock_service):
         """Тест функции extract_categorized_dishes_from_menu"""
         mock_service.extract_categorized_dishes.return_value = {
@@ -206,7 +206,7 @@ class TestPublicFunctions(unittest.TestCase):
         self.assertEqual(len(result["первое"]), 2)
         mock_service.extract_categorized_dishes.assert_called_once_with("test.xlsx")
     
-    @patch('dish_extractor._extractor_service')
+    @patch('app.services.dish_extractor._extractor_service')
     def test_extract_date_from_menu(self, mock_service):
         """Тест функции extract_date_from_menu"""
         test_date = datetime(2024, 9, 5)
