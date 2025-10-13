@@ -775,34 +775,14 @@ class MainWindow(QMainWindow):
                 output_path=save_path,
             )
             
-            if success:
-                QMessageBox.information(self, "Готово", f"Шаблон меню заполнен и сохранён!\n{message}\nФайл: {Path(save_path).name}")
-            else:
-                QMessageBox.warning(self, "Ошибка", f"Не удалось заполнить шаблон:\n{message}")
+            if not success:
+                QMessageBox.warning(self, "Ошибка", f"Не удалось выполнить операцию:\n{message}")
                 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
 
-def _setup_logging():
-    """Configure file logging for template operations on Desktop."""
-    try:
-        logger = logging.getLogger("menu.template")
-        logger.setLevel(logging.INFO)
-        if not logger.handlers:
-            log_path = Path.home() / "Desktop" / "menu_template.log"
-            fh = logging.FileHandler(log_path, encoding='utf-8')
-            fh.setLevel(logging.INFO)
-            fmt = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
-            fh.setFormatter(fmt)
-            logger.addHandler(fh)
-    except Exception:
-        # Fail silently if logging can't be configured
-        pass
-
-
 def main():
-    _setup_logging()
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()

@@ -80,7 +80,6 @@ def update_slide_with_dishes(slide, dishes: List[DishItem]) -> bool:
             # Добавляем баллы за количество строк
             score += data_rows
             
-            print(f"Таблица: {rows} строк, {len(table.columns)} столбцов, заголовки: {[cell.text.strip() for cell in table.rows[0].cells][:3]}, оценка: {score}")
             
             if score > best_score:
                 best_score = score
@@ -88,11 +87,8 @@ def update_slide_with_dishes(slide, dishes: List[DishItem]) -> bool:
                 max_data_rows = data_rows
         
         if best_table_shape is None:
-            print("Не найдена подходящая таблица")
             return False
             
-        print(f"Найдено таблиц на слайде: {len(table_shapes)}")
-        print(f"Выбрана лучшая таблица с {max_data_rows} строками для данных (оценка: {best_score})")
         
         table = best_table_shape.table
         
@@ -193,7 +189,6 @@ def update_slide_with_dishes(slide, dishes: List[DishItem]) -> bool:
         return True
         
     except Exception as e:
-        print(f"Ошибка при обновлении слайда: {e}")
         return False
 
 
@@ -239,11 +234,6 @@ def update_presentation_with_all_categories(presentation_path: str, all_dishes: 
                 slide = prs.slides[slide_idx]
                 if update_slide_with_dishes(slide, all_dishes[category]):
                     success_count += 1
-                    print(f"Слайд {slide_idx + 1} ({category}): добавлено {len(all_dishes[category])} блюд")
-                else:
-                    print(f"Ошибка при обновлении слайда {slide_idx + 1} ({category})")
-            else:
-                print(f"Нет данных для категории {category}")
                 
         # Сохраняем презентацию
         prs.save(output_path)
@@ -251,7 +241,6 @@ def update_presentation_with_all_categories(presentation_path: str, all_dishes: 
         return success_count > 0
         
     except Exception as e:
-        print(f"Ошибка при обновлении презентации: {e}")
         return False
 
 
@@ -275,17 +264,12 @@ def create_presentation_with_fish_and_side_dishes(template_path: str, excel_path
             return False, f"Excel файл не найден: {excel_path}"
 
         # Рыба: сначала пробуем столбец E (как раньше), затем общий поиск
-        print(f"🔍 Ищем рыбные блюда (приоритет — столбец E) в файле: {excel_path}")
         fish_dishes = extract_fish_dishes_from_column_e(excel_path)
         if len(fish_dishes) == 0:
-            print("Пробуем альтернативный поиск рыбных блюд...")
             fish_dishes = extract_fish_dishes_from_excel(excel_path)
-        print(f"Рыбные блюда: найдено {len(fish_dishes)}")
 
         # Гарниры
-        print(f"🔍 Ищем гарниры в файле: {excel_path}")
         side_dishes = extract_side_dishes_from_excel(excel_path)
-        print(f"Гарниры: найдено {len(side_dishes)} блюд")
 
         if len(fish_dishes) == 0 and len(side_dishes) == 0:
             return False, "В Excel файле не найдены рыбные блюда/гарниры. Проверьте структуру файла и названия категорий."

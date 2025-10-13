@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import re
-import logging
 
 from app.services.dish_extractor import (
     extract_categorized_dishes_from_menu,
@@ -841,7 +840,6 @@ class MenuTemplateFiller:
                 # Записываем сверху вниз
                 written = write_items(tpl_ws, items, r_start, r_end, (1, 2, 3))
                 total_written += written
-                logger.info(f"Лист '{tpl_ws.title}': записано {written} строк в A{r_start}..A{r_end}")
 
             # Сохраняем результат как новый файл
             tpl_wb.save(output_path)
@@ -995,15 +993,13 @@ class MenuTemplateFiller:
                 return False, f"Исходный файл не найден: {source_menu_path}"
 
             # Логгер для шаблона
-            logger = logging.getLogger("menu.template")
-            logger.info(f"Старт заполнения фиксированных диапазонов: template={template_path}, source={source_menu_path}")
+            logger = None  # логирование отключено
 
             # Извлекаем дату для обновления в шаблоне
             menu_date = self.extract_date_from_menu(source_menu_path)
 
             # Извлекаем блюда
             # Завтраки — читаем до салатов/холодных закусок (детально)
-            logger.info("Извлечение (завтраки): функция=extract_dishes_from_excel_rows_with_stop, start=['ЗАВТРАК'], stop=['САЛАТЫ','ХОЛОДНЫЕ','ЗАКУСКИ']")
             breakfasts: List[DishItem] = []
             try:
                 breakfasts = extract_dishes_from_excel_rows_with_stop(
@@ -1011,9 +1007,6 @@ class MenuTemplateFiller:
                     ["ЗАВТРАК"],
                     ["САЛАТЫ", "ХОЛОДНЫЕ", "ЗАКУСКИ"],
                 )
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug("Завтраки (raw): " + ", ".join([getattr(x, 'name', '') for x in breakfasts]))
-                logger.info(f"Найдено завтраков (raw): {len(breakfasts)}")
             except Exception as e:
                 logger.warning(f"Не удалось извлечь завтраки: {e}")
                 breakfasts = []
@@ -1028,25 +1021,17 @@ class MenuTemplateFiller:
                     logger.warning(f"Fallback завтраков не удался: {e}")
 
             # Первые блюда (супы) — детально
-            logger.info("Извлечение (первые блюда): функция=extract_dishes_from_excel, keywords=['ПЕРВЫЕ БЛЮДА','ПЕРВЫЕ']")
             soups: List[DishItem] = []
             try:
                 soups = extract_dishes_from_excel(source_menu_path, ["ПЕРВЫЕ БЛЮДА", "ПЕРВЫЕ"])
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug("Супы (raw): " + ", ".join([getattr(x, 'name', '') for x in soups]))
-                logger.info(f"Найдено первых блюд (raw): {len(soups)}")
             except Exception as e:
                 logger.warning(f"Не удалось извлечь первые блюда: {e}")
                 soups = []
 
             # Мясные блюда — детально
-            logger.info("Извлечение (мясо): функция=extract_dishes_from_excel, keywords=['БЛЮДА ИЗ МЯСА','МЯСНЫЕ БЛЮДА']")
             meats: List[DishItem] = []
             try:
                 meats = extract_dishes_from_excel(source_menu_path, ["БЛЮДА ИЗ МЯСА", "МЯСНЫЕ БЛЮДА"])
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug("Мясо (raw): " + ", ".join([getattr(x, 'name', '') for x in meats]))
-                logger.info(f"Найдено мясных блюд (raw): {len(meats)}")
             except Exception as e:
                 logger.warning(f"Не удалось извлечь мясные блюда: {e}")
                 meats = []
@@ -1064,31 +1049,22 @@ class MenuTemplateFiller:
                 poultry = []
 
             # Рыба — детально
-            logger.info("Извлечение (рыба): функция=extract_dishes_from_excel, keywords=['БЛЮДА ИЗ РЫБЫ','РЫБНЫЕ БЛЮДА']")
             fish: List[DishItem] = []
             try:
                 fish = extract_dishes_from_excel(source_menu_path, ["БЛЮДА ИЗ РЫБЫ", "РЫБНЫЕ БЛЮДА"])
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug("Рыба (raw): " + ", ".join([getattr(x, 'name', '') for x in fish]))
-                logger.info(f"Найдено рыбных блюд (raw): {len(fish)}")
             except Exception as e:
                 logger.warning(f"Не удалось извлечь рыбные блюда: {e}")
                 fish = []
 
             # Гарниры — детально
-            logger.info("Извлечение (гарниры): функция=extract_dishes_from_excel, keywords=['ГАРНИРЫ','ГАРНИР']")
             garnirs: List[DishItem] = []
             try:
                 garnirs = extract_dishes_from_excel(source_menu_path, ["ГАРНИРЫ", "ГАРНИР"])
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug("Гарниры (raw): " + ", ".join([getattr(x, 'name', '') for x in garnirs]))
-                logger.info(f"Найдено гарниров (raw): {len(garnirs)}")
             except Exception as e:
                 logger.warning(f"Не удалось извлечь гарниры: {e}")
                 garnirs = []
 
             # Салаты — детально (построчно до следующей категории)
-            logger.info("Извлечение (салаты): функция=extract_dishes_from_excel_rows_with_stop, start=['САЛАТЫ','ЗАКУСК'], stop=['ПЕРВЫЕ','БЛЮДА ИЗ','ГАРНИР','НАПИТ']")
             salads: List[DishItem] = []
             try:
                 salads = extract_dishes_from_excel_rows_with_stop(
@@ -1096,9 +1072,6 @@ class MenuTemplateFiller:
                     ["САЛАТ"],
                     ["ПЕРВЫЕ", "БЛЮДА ИЗ", "ГАРНИР", "НАПИТ"]
                 )
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug("Салаты (raw): " + ", ".join([getattr(x, 'name', '') for x in salads]))
-                logger.info(f"Найдено салатов (raw): {len(salads)}")
             except Exception as e:
                 logger.warning(f"Не удалось извлечь салаты: {e}")
                 salads = []
@@ -1188,7 +1161,6 @@ class MenuTemplateFiller:
             fish = _align(fish, cat_names.get('рыба', []))
             garnirs = _align(garnirs, cat_names.get('гарнир', []))
 
-            logger.info(f"Выравнивание по журналу: завтраки(без выравн.)={len(breakfasts)}, супы={len(soups)}, мясо={len(meats)}, птица={len(poultry)}, рыба={len(fish)}, гарниры={len(garnirs)}, салаты(без выравн.)={len(salads)}")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Завтраки: " + ", ".join([getattr(x, 'name', '') for x in breakfasts]))
                 logger.debug("Супы: " + ", ".join([getattr(x, 'name', '') for x in soups]))
@@ -1216,7 +1188,6 @@ class MenuTemplateFiller:
             # Завтраки — A/B/C
             b_start, b_end = breakfast_range
             # Вставка завтраков: лист, диапазон, колонки
-            logger.info(f"Вставка (завтраки): лист={ws.title}, диапазон=A{b_start}..A{b_end}, колонки=1/2/3, позиций={len(breakfasts)}, overwrite=True")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Завтраки (final): " + ", ".join([f"{getattr(x,'name','')} [{getattr(x,'weight','')}] [{getattr(x,'price','')}]" for x in breakfasts]))
             total_inserted += fill_cells_sequential(
@@ -1240,7 +1211,6 @@ class MenuTemplateFiller:
             except Exception:
                 pass
             # Вставка супов: лист, диапазон, колонки
-            logger.info(f"Вставка (первые блюда): лист={ws.title}, диапазон=D{s_write_start}..D{s_end}, колонки=4/5/6, позиций={len(soups)}, overwrite=True")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Супы (final): " + ", ".join([getattr(x, 'name', '') for x in soups]))
             total_inserted += fill_cells_sequential(
@@ -1257,7 +1227,6 @@ class MenuTemplateFiller:
             # Мясо — D/E/F (после заголовка на D11)
             m_start, m_end = meat_range
             # Вставка мяса: лист, диапазон, колонки
-            logger.info(f"Вставка (мясо): лист={ws.title}, диапазон=D{m_start}..D{m_end}, колонки=4/5/6, позиций={len(meats)}, overwrite=True")
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug("Мясо (final): " + ", ".join([getattr(x, 'name', '') for x in meats]))
             total_inserted += fill_cells_sequential(
@@ -1297,7 +1266,6 @@ class MenuTemplateFiller:
             try:
                 fish_start = self.find_data_start_row(ws, 4, 'рыба')
                 fish_end = self.find_category_end_row(ws, 4, fish_start, 'рыба')
-                logger.info(f"Вставка (рыба): лист={ws.title}, диапазон=D{fish_start}..D{fish_end}, колонки=4/5/6, позиций={len(fish)}, overwrite=True")
                 total_inserted += fill_cells_sequential(
                     ws,
                     start_row=fish_start,
@@ -1315,7 +1283,6 @@ class MenuTemplateFiller:
             try:
                 garn_start = self.find_data_start_row(ws, 4, 'гарнир')
                 garn_end = self.find_category_end_row(ws, 4, garn_start, 'гарнир')
-                logger.info(f"Вставка (гарниры): лист={ws.title}, диапазон=D{garn_start}..D{garn_end}, колонки=4/5/6, позиций={len(garnirs)}, overwrite=True")
                 total_inserted += fill_cells_sequential(
                     ws,
                     start_row=garn_start,
@@ -1334,7 +1301,6 @@ class MenuTemplateFiller:
                 salads_start = self.find_data_start_row(ws, 1, 'салат')
                 salads_end = self.find_category_end_row(ws, 1, salads_start, 'салат')
                 safe_start = max(salads_start, b_end + 1)
-                logger.info(f"Вставка (салаты): лист={ws.title}, диапазон=A{safe_start}..A{salads_end}, колонки=1/2/3, позиций={len(salads)}, overwrite=True")
                 total_inserted += fill_cells_sequential(
                     ws,
                     start_row=safe_start,
@@ -1369,8 +1335,6 @@ class MenuTemplateFiller:
         только на листах «Касса/Касс». Оформление и объединения не меняем.
         """
         import openpyxl
-        import logging
-        logger = logging.getLogger("menu.template")
 
         try:
             if not Path(template_path).exists():
@@ -1553,14 +1517,12 @@ class MenuTemplateFiller:
                         try:
                             hx_ws.cell(row=19, column=1).value = f1
                             hx_ws.cell(row=20, column=1).value = f2
-                            logger.info(f"Хц: A19/A20 привязаны к {ref} и делятся по '/' формулой")
                         except Exception:
                             pass
             except Exception:
                 pass
 
             tpl_wb.save(output_path)
-            logger.info(f"Скопировано {copied} ячеек в диапазон A6..F42 (лист: {tpl_ws.title}); нормализация колонок D/E/F выполнена; дата обновлена; ссылки ХЦ установлены")
             return True, f"Скопировано {copied} ячеек в A6..F42; дата обновлена; ссылки ХЦ установлены"
         except Exception as e:
             return False, f"Ошибка при копировании A6..F42: {str(e)}"
