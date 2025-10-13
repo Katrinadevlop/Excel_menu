@@ -212,35 +212,55 @@ def update_presentation_with_all_categories(presentation_path: str, all_dishes: 
         
         # Открываем презентацию
         prs = Presentation(output_path)
-        
-        # Проверяем, что у нас достаточно слайдов
-        if len(prs.slides) < 7:
-            return False
-            
-        # Маппинг категорий на индексы слайдов
-        slide_mapping = {
-            'salads': 1,        # Слайд 2: САЛАТЫ И ХОЛОДНЫЕ ЗАКУСКИ
-            'first_courses': 2, # Слайд 3: ПЕРВЫЕ БЛЮДА
-            'meat': 3,          # Слайд 4: МЯСНЫЕ БЛЮДА
-            'poultry': 4,       # Слайд 5: БЛЮДА ИЗ ПТИЦЫ
-            'fish': 5,          # Слайд 6: РЫБНЫЕ БЛЮДА
-            'side_dishes': 6    # Слайд 7: ГАРНИРЫ
+
+        # Функция поиска слайда по заголовку/тексту (без жёсткой привязки к индексу)
+        def find_slide(keywords: list[str]) -> Optional[int]:
+            keys = [k.lower() for k in keywords]
+            for idx, slide in enumerate(prs.slides):
+                # Обходим все shapes и извлекаем текст
+                texts = []
+                for sh in slide.shapes:
+                    try:
+                        if hasattr(sh, 'text') and sh.text:
+                            texts.append(sh.text)
+                        elif hasattr(sh, 'placeholder_format') and hasattr(sh, 'text_frame') and sh.text_frame:
+                            texts.append(sh.text_frame.text)
+                    except Exception:
+                        continue
+                slide_text = ' '.join(texts).lower()
+                if all(k in slide_text for k in keys):
+                    return idx
+            return None
+
+        # Определяем целевые слайды по заголовкам
+        title_map = {
+            'salads': ['салат', 'закуск'],
+            'first_courses': ['первые', 'блюда'],
+            'meat': ['мясн', 'блюда'],
+            'poultry': ['птиц', 'блюда'],
+            'fish': ['рыбн', 'блюда'],
+            'side_dishes': ['гарнир'],
         }
-        
-        # Обновляем каждый слайд соответствующими данными
+
         success_count = 0
-        for category, slide_idx in slide_mapping.items():
-            if category in all_dishes and all_dishes[category]:
-                slide = prs.slides[slide_idx]
-                if update_slide_with_dishes(slide, all_dishes[category]):
-                    success_count += 1
-                
-        # Сохраняем презентацию
+        for category, keys in title_map.items():
+            dishes = all_dishes.get(category) or []
+            if not dishes:
+                continue
+            idx = find_slide(keys)
+            if idx is None:
+                # Фолбек на старое позиционирование по индексам
+                default_map = {'salads': 1, 'first_courses': 2, 'meat': 3, 'poultry': 4, 'fish': 5, 'side_dishes': 6}
+                idx = default_map.get(category)
+                if idx is None or idx >= len(prs.slides):
+                    continue
+            slide = prs.slides[idx]
+            if update_slide_with_dishes(slide, dishes):
+                success_count += 1
+
         prs.save(output_path)
-        
         return success_count > 0
-        
-    except Exception as e:
+    except Exception:
         return False
 
 
