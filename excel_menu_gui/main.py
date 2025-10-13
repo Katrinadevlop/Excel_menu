@@ -1,6 +1,7 @@
 import os
 import sys
 import shutil
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -738,12 +739,20 @@ class MainWindow(QMainWindow):
             # Получаем дату из меню
             menu_date = filler.extract_date_from_menu(excel_path)
             
+            # Формируем имя "<день> <месяц> - <день недели>.xlsx"
+            russian_months = {
+                1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля', 5: 'мая', 6: 'июня',
+                7: 'июля', 8: 'августа', 9: 'сентября', 10: 'октября', 11: 'ноября', 12: 'декабря'
+            }
+            weekday_names = {
+                0: 'понедельник', 1: 'вторник', 2: 'среда', 3: 'четверг', 4: 'пятница', 5: 'суббота', 6: 'воскресенье'
+            }
             if menu_date:
-                date_str = menu_date.strftime("%d.%m.%Y")
-                suggested_name = f"шаблон_меню_{date_str}.xlsx"
+                d, m, wd = menu_date.day, menu_date.month, menu_date.weekday()
             else:
-                today_str = date.today().strftime("%d.%m.%Y")
-                suggested_name = f"шаблон_меню_{today_str}.xlsx"
+                today = date.today()
+                d, m, wd = today.day, today.month, today.weekday()
+            suggested_name = f"{d} {russian_months.get(m, '')} - {weekday_names.get(wd, '')}.xlsx"
             
             # Выбираем место сохранения заполненного шаблона
             desktop = Path.home() / "Desktop"
@@ -759,11 +768,11 @@ class MainWindow(QMainWindow):
             if not save_path:
                 return  # Пользователь отменил сохранение
                 
-            # Заполняем шаблон данными
-            success, message = filler.fill_menu_template(
+            # Копирование прямоугольника A6..F42 с листа «Касса» источника в лист «Касса» шаблона
+            success, message = filler.copy_kassa_rect_A6_F42(
                 template_path=template_path,
                 source_menu_path=excel_path,
-                output_path=save_path
+                output_path=save_path,
             )
             
             if success:
@@ -775,7 +784,25 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
 
+def _setup_logging():
+    """Configure file logging for template operations on Desktop."""
+    try:
+        logger = logging.getLogger("menu.template")
+        logger.setLevel(logging.INFO)
+        if not logger.handlers:
+            log_path = Path.home() / "Desktop" / "menu_template.log"
+            fh = logging.FileHandler(log_path, encoding='utf-8')
+            fh.setLevel(logging.INFO)
+            fmt = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+            fh.setFormatter(fmt)
+            logger.addHandler(fh)
+    except Exception:
+        # Fail silently if logging can't be configured
+        pass
+
+
 def main():
+    _setup_logging()
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()

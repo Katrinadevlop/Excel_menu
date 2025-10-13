@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Iterable
 
+import logging
 from app.services.dish_extractor import DishItem
 
 
@@ -30,7 +31,8 @@ class TargetColumns:
 
 
 def fill_cells_sequential(ws, start_row: int, stop_row: int, columns: TargetColumns,
-                          dishes: List[DishItem], replace_only_empty: bool = True) -> int:
+                          dishes: List[DishItem], replace_only_empty: bool = True,
+                          logger: Optional[logging.Logger] = None, log_context: str = "") -> int:
     """
     Последовательно заполняет строки Excel блюдами в заданных колонках.
 
@@ -41,6 +43,8 @@ def fill_cells_sequential(ws, start_row: int, stop_row: int, columns: TargetColu
         columns (TargetColumns): Колонки для названия/веса/цены.
         dishes (List[DishItem]): Блюда (name обязательно, weight/price — опционально).
         replace_only_empty (bool): Заполнять только пустые ячейки (по умолчанию True). Если False — перезаписывает.
+        logger (Optional[logging.Logger]): Логгер для записи прогресса (INFO — сводка, DEBUG — построчно).
+        log_context (str): Доп. контекст для логов (например, категория/диапазон).
 
     Returns:
         int: Количество вставленных строк блюд.
@@ -48,6 +52,12 @@ def fill_cells_sequential(ws, start_row: int, stop_row: int, columns: TargetColu
     inserted = 0
     if start_row >= stop_row:
         return 0
+
+    if logger:
+        rng = f"{start_row}..{stop_row-1}"
+        cols = f"{columns.name_col}/{columns.weight_col}/{columns.price_col}"
+        ctx = f" [{log_context}]" if log_context else ""
+        logger.info(f"Пишем {len(dishes)} позиций в строки {rng}, колонки {cols}{ctx}")
 
     row = start_row
     dish_idx = 0
@@ -61,6 +71,8 @@ def fill_cells_sequential(ws, start_row: int, stop_row: int, columns: TargetColu
         if can_write_name and item.name:
             cell_name.value = item.name
             wrote_any = True
+        elif logger and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Строка {row}: ячейка названия занята, пропуск (value={cell_name.value!r})")
 
         # Заполнение веса/выхода
         if columns.weight_col:
@@ -79,10 +91,17 @@ def fill_cells_sequential(ws, start_row: int, stop_row: int, columns: TargetColu
                 wrote_any = True
 
         if wrote_any:
+            if logger and logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"Строка {row}: вставлено name={item.name!r}, weight={item.weight!r}, price={item.price!r}")
             inserted += 1
             dish_idx += 1
         # Если строка занята и ничего не записали, просто сдвигаемся вниз
         row += 1
+
+    if logger:
+        rng = f"{start_row}..{stop_row-1}"
+        ctx = f" [{log_context}]" if log_context else ""
+        logger.info(f"Итого вставлено {inserted} строк в диапазон {rng}{ctx}")
 
     return inserted
 

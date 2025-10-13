@@ -257,7 +257,8 @@ def update_presentation_with_all_categories(presentation_path: str, all_dishes: 
 
 def create_presentation_with_fish_and_side_dishes(template_path: str, excel_path: str, output_path: str) -> Tuple[bool, str]:
     """
-    Создаёт презентацию, заполняя 6-й слайд рыбными блюдами.
+    Создаёт презентацию и заполняет слайды рыбными блюдами (6-й слайд) и гарнирами (7-й слайд),
+    используя общий механизм обновления презентации.
 
     Args:
         template_path (str): Путь к шаблону презентации .pptx.
@@ -272,27 +273,45 @@ def create_presentation_with_fish_and_side_dishes(template_path: str, excel_path
             return False, f"Шаблон презентации не найден: {template_path}"
         if not Path(excel_path).exists():
             return False, f"Excel файл не найден: {excel_path}"
-        
-        print(f"🔍 Ищем рыбные блюда из столбца E в файле: {excel_path}")
+
+        # Рыба: сначала пробуем столбец E (как раньше), затем общий поиск
+        print(f"🔍 Ищем рыбные блюда (приоритет — столбец E) в файле: {excel_path}")
         fish_dishes = extract_fish_dishes_from_column_e(excel_path)
-        print(f"Найдено рыбных блюд: {len(fish_dishes)}")
-        
         if len(fish_dishes) == 0:
-            return False, "В Excel файле не найдены рыбные блюда. Проверьте структуру файла и наличие заголовка 'БЛЮДА ИЗ РЫБЫ'."
-        
-        shutil.copy2(template_path, output_path)
-        prs = Presentation(output_path)
-        if len(prs.slides) < 6:
-            return False, f"Презентация должна содержать минимум 6 слайдов. Текущее количество: {len(prs.slides)}"
-        slide_6 = prs.slides[5]
-        success = update_slide_with_dishes(slide_6, fish_dishes)
-        if success:
-            prs.save(output_path)
-            message = f"Презентация создана!\n6-й слайд: добавлено {len(fish_dishes)} рыбных блюд"
-            return True, message
-        else:
-            return False, "Ошибка при обновлении 6-го слайда презентации"
-            
+            print("Пробуем альтернативный поиск рыбных блюд...")
+            fish_dishes = extract_fish_dishes_from_excel(excel_path)
+        print(f"Рыбные блюда: найдено {len(fish_dishes)}")
+
+        # Гарниры
+        print(f"🔍 Ищем гарниры в файле: {excel_path}")
+        side_dishes = extract_side_dishes_from_excel(excel_path)
+        print(f"Гарниры: найдено {len(side_dishes)} блюд")
+
+        if len(fish_dishes) == 0 and len(side_dishes) == 0:
+            return False, "В Excel файле не найдены рыбные блюда/гарниры. Проверьте структуру файла и названия категорий."
+
+        # Собираем только нужные категории и вызываем общий обновитель
+        all_dishes = {
+            'salads': [],
+            'first_courses': [],
+            'meat': [],
+            'poultry': [],
+            'fish': fish_dishes,
+            'side_dishes': side_dishes,
+        }
+
+        ok = update_presentation_with_all_categories(template_path, all_dishes, output_path)
+        if not ok:
+            return False, "Ошибка при обновлении презентации (рыба/гарниры)"
+
+        parts = []
+        if len(fish_dishes) > 0:
+            parts.append(f"6-й слайд (рыба): {len(fish_dishes)} блюд")
+        if len(side_dishes) > 0:
+            parts.append(f"7-й слайд (гарниры): {len(side_dishes)} блюд")
+        message = "Презентация создана!\n" + "\n".join(parts)
+        return True, message
+
     except Exception as e:
         return False, f"Ошибка: {str(e)}"
 

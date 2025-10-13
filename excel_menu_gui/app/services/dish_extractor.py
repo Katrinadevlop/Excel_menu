@@ -672,6 +672,27 @@ def detect_category_columns(df, category_row: int, category_name: str) -> List[i
         return [3, 4, 5]
 
 
+def _sanitize_price_string(raw: str) -> str:
+    """Возвращает цену без валюты (руб/р/₽), только число (и ','), поддерживает варианты через '/'."""
+    if not raw:
+        return ""
+    s = str(raw)
+    # Разбиваем по '/', обрабатываем каждую часть отдельно
+    parts = [p.strip() for p in s.split('/')]
+    cleaned_parts = []
+    for p in parts:
+        # Ищем первое число с опциональной дробной частью
+        m = re.search(r"(\d+(?:[\.,]\d{1,2})?)", p)
+        if not m:
+            cleaned_parts.append("")
+            continue
+        num = m.group(1).replace('.', ',')
+        cleaned_parts.append(num)
+    # Склеиваем назад, убираем пустые хвосты
+    cleaned = [c for c in cleaned_parts if c != ""]
+    return "/".join(cleaned)
+
+
 def extract_dishes_from_excel_column(excel_path: str, category_keywords: List[str]) -> List[DishItem]:
     """
     Извлекает блюда из Excel при колоночной структуре данных (Название | Вес | Цена).
@@ -750,10 +771,7 @@ def extract_dishes_from_excel_column(excel_path: str, category_keywords: List[st
                                 if not weight and re.search(r'\d+.*?(?:г|шт|мл|л)', cell_value, re.IGNORECASE):
                                     weight = cell_value
                                 if not price and re.search(r'\d+', cell_value) and not re.search(r'(?:г|шт|мл|л)', cell_value):
-                                    if cell_value.isdigit():
-                                        price = f"{cell_value} руб."
-                                    else:
-                                        price = cell_value
+                                    price = _sanitize_price_string(cell_value)
                         dishes.append(DishItem(name=dish_name, weight=weight, price=price))
             if not any(pd.notna(cell) for cell in row):
                 break
@@ -877,7 +895,8 @@ def extract_dishes_from_excel_rows(excel_path: str, category_keywords: List[str]
                 s = str(v)
                 if is_weight_like(s):
                     continue
-                for m in re.finditer(price_pattern, s, flags=re.IGNORECASE):
+                # Ищем все числа (возможна последняя цена в строке)
+                for m in re.finditer(r"(\d+(?:[\.,]\d{1,2})?)", s, flags=re.IGNORECASE):
                     num = m.group(1).replace(',', '.')
                     try:
                         val = float(num)
@@ -888,10 +907,9 @@ def extract_dishes_from_excel_rows(excel_path: str, category_keywords: List[str]
                 return None
             val = candidates[-1]
             if abs(val - int(val)) < 1e-6:
-                txt = f"{int(val)} руб."
+                return f"{int(val)}"
             else:
-                txt = f"{str(val).replace('.', ',')} руб."
-            return txt
+                return f"{str(val).replace('.', ',')}"
 
         dishes: List[DishItem] = []
         current_row = category_row + 1

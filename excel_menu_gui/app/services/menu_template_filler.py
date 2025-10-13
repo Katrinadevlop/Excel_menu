@@ -11,8 +11,15 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import re
+import logging
 
-from app.services.dish_extractor import extract_categorized_dishes_from_menu, extract_date_from_menu
+from app.services.dish_extractor import (
+    extract_categorized_dishes_from_menu,
+    extract_date_from_menu,
+    extract_dishes_from_excel,
+    extract_dishes_from_excel_rows_with_stop,
+    DishItem,
+)
 from app.services.comparator import _find_category_ranges, _extract_dishes_from_multiple_columns, read_cell_values, normalize_dish
 
 
@@ -684,6 +691,156 @@ class MenuTemplateFiller:
             return False, f"Ошибка при заполнении шаблона: {str(e)}"
 
 
+    def copy_from_source_sheets_to_template(self, template_path: str, source_menu_path: str, output_path: str,
+                                            breakfast_range: Tuple[int, int] = (7, 27),
+                                            lunch_range: Optional[Tuple[int, int]] = None) -> Tuple[bool, str]:
+        """
+        Копирует данные из источника (листы «Завтрак», «Обед») в одноимённые листы шаблона.
+        
+        Маппинг колонок (источник -> шаблон):
+          - источник: col0=вес/выход, col1=название, col2=цена
+          - шаблон:  A=название,       B=вес/выход, C=цена
+        
+        Диапазоны:
+          - «Завтрак»: A7..A27; B7..B27; C7..C27
+          - «Обед»:    те же A/B/C, начиная со стартовой строки списка (если не указано иначе — как у «Завтрак»)
+        
+        Правила:
+          - перед заполнением очищаем целевой диапазон (значения), оформление не трогаем
+          - переносим блюда сверху вниз до конца диапазона
+          - пустые/битые строки пропускаем; если цена отсутствует — C оставляем пустой
+          - листы «Касса», «Гц», «Хц», «Раздача» не трогаем
+        """
+        import openpyxl
+        import logging
+        from app.services.dish_extractor import DishItem
+        logger = logging.getLogger("menu.template")
+
+        def sanitize_price(raw) -> str:
+            if raw is None:
+                return ""
+            s = str(raw)
+            parts = [p.strip() for p in s.split('/')]
+            out = []
+            import re as _re
+            for p in parts:
+                m = _re.search(r"(\d+(?:[\.,]\d{1,2})?)", p)
+                if not m:
+                    continue
+                num = m.group(1).replace('.', ',')
+                out.append(num)
+            return "/".join(out)
+
+        def find_sheet_case_insensitive(wb, keyword: str):
+            for sh in wb.worksheets:
+                if keyword.lower() in sh.title.lower():
+                    return sh
+            return None
+
+        def clear_range(ws, start_row: int, end_row: int, cols: Tuple[int, int, int]):
+            c1, c2, c3 = cols
+            for r in range(start_row, end_row + 1):
+                for c in (c1, c2, c3):
+                    cell = ws.cell(row=r, column=c)
+                    try:
+                        cell.value = None
+                    except AttributeError:
+                        # пропускаем MergedCell
+                        pass
+
+        def write_items(ws, items: List[DishItem], start_row: int, end_row: int, cols: Tuple[int, int, int]) -> int:
+            c_name, c_weight, c_price = cols
+            r = start_row
+            written = 0
+            for it in items:
+                if r > end_row:
+                    break
+                name = (it.name or '').strip()
+                if not name:
+                    continue
+                weight = (it.weight or '').strip()
+                price = (it.price or '').strip()
+                # Пишем, не трогая оформление; пропускаем MergedCell-ячейки
+                try:
+                    ws.cell(row=r, column=c_name).value = name
+                except AttributeError:
+                    pass
+                try:
+                    ws.cell(row=r, column=c_weight).value = weight
+                except AttributeError:
+                    pass
+                try:
+                    ws.cell(row=r, column=c_price).value = price
+                except AttributeError:
+                    pass
+                r += 1
+                written += 1
+            return written
+
+        try:
+            if not Path(template_path).exists():
+                return False, f"Шаблон не найден: {template_path}"
+            if not Path(source_menu_path).exists():
+                return False, f"Источник не найден: {source_menu_path}"
+
+            # Открываем книги
+            src_wb = openpyxl.load_workbook(source_menu_path, data_only=True)
+            tpl_wb = openpyxl.load_workbook(template_path)
+
+            # Готовим список задач: (имя_листа, диапозон)
+            br_start, br_end = breakfast_range
+            ln_start, ln_end = lunch_range if lunch_range else breakfast_range
+            tasks = [
+                ("завтрак", br_start, br_end),
+                ("обед", ln_start, ln_end),
+            ]
+
+            total_written = 0
+            for key, r_start, r_end in tasks:
+                # Ищем листы (источник/шаблон)
+                src_ws = find_sheet_case_insensitive(src_wb, key)
+                tpl_ws = find_sheet_case_insensitive(tpl_wb, key)
+                if src_ws is None or tpl_ws is None:
+                    logger.info(f"Лист '{key}' отсутствует в одном из файлов, пропускаю")
+                    continue
+                if tpl_ws.title.lower() in ["касса", "гц", "хц", "раздача"]:
+                    logger.info(f"Лист '{tpl_ws.title}' нельзя менять, пропускаю")
+                    continue
+
+                # Читаем данные из источника: col0=вес, col1=название, col2=цена
+                items: List[DishItem] = []
+                header_tokens = ['завтрак', 'вес', 'ед.изм', 'ед. изм', 'цена', 'руб']
+                for r in range(1, src_ws.max_row + 1):
+                    w = src_ws.cell(row=r, column=1).value  # вес
+                    n = src_ws.cell(row=r, column=2).value  # название
+                    p = src_ws.cell(row=r, column=3).value  # цена
+                    n_txt = (str(n).strip() if n else '')
+                    if not n_txt:
+                        continue
+                    # Пропускаем заголовки/шапки
+                    n_low = n_txt.lower()
+                    w_low = (str(w).lower() if isinstance(w, str) else str(w).lower()) if w not in (None, '') else ''
+                    p_low = (str(p).lower() if isinstance(p, str) else str(p).lower()) if p not in (None, '') else ''
+                    if any(tok in n_low for tok in header_tokens) or any(tok in w_low for tok in header_tokens) or any(tok in p_low for tok in header_tokens):
+                        continue
+                    w_txt = str(w).strip() if w else ''
+                    p_txt = sanitize_price(p)
+                    items.append(DishItem(name=n_txt, weight=w_txt, price=p_txt))
+
+                # Очищаем диапазон в шаблоне
+                clear_range(tpl_ws, r_start, r_end, (1, 2, 3))
+
+                # Записываем сверху вниз
+                written = write_items(tpl_ws, items, r_start, r_end, (1, 2, 3))
+                total_written += written
+                logger.info(f"Лист '{tpl_ws.title}': записано {written} строк в A{r_start}..A{r_end}")
+
+            # Сохраняем результат как новый файл
+            tpl_wb.save(output_path)
+            return True, f"Скопировано строк: {total_written}"
+        except Exception as e:
+            return False, f"Ошибка при копировании из источника в шаблон: {str(e)}"
+
     def fill_menu_template_with_details(self, template_path: str, source_menu_path: str, output_path: str) -> Tuple[bool, str]:
         """
         Заполняет шаблон меню с деталями (название, вес, цена)
@@ -800,9 +957,803 @@ class MenuTemplateFiller:
             message += f"Всего добавлено блюд: {total_filled}"
             
             return True, message
-            
         except Exception as e:
             return False, f"Ошибка при заполнении шаблона с деталями: {str(e)}"
+
+    def fill_menu_template_fixed_ranges(
+        self,
+        template_path: str,
+        source_menu_path: str,
+        output_path: str,
+        breakfast_range: Tuple[int, int] = (7, 27),
+        soups_range: Tuple[int, int] = (6, 10),
+        meat_range: Tuple[int, int] = (12, 17),
+    ) -> Tuple[bool, str]:
+        """
+        Заполняет шаблон в фиксированные диапазоны:
+        - Завтраки: A/B/C, строки A7..A27
+        - Первые блюда (супы): D/E/F, строки D6..D10
+        - Мясные блюда: D/E/F, строки D12..D17
+        D11 считается заголовком и не заполняется.
+        """
+        try:
+            from app.services.excel_inserter import fill_cells_sequential, TargetColumns
+            import openpyxl
+            from pathlib import Path
+
+            if not Path(template_path).exists():
+                return False, f"Шаблон не найден: {template_path}"
+            if not Path(source_menu_path).exists():
+                return False, f"Исходный файл не найден: {source_menu_path}"
+
+            # Логгер для шаблона
+            logger = logging.getLogger("menu.template")
+            logger.info(f"Старт заполнения фиксированных диапазонов: template={template_path}, source={source_menu_path}")
+
+            # Извлекаем дату для обновления в шаблоне
+            menu_date = self.extract_date_from_menu(source_menu_path)
+
+            # Извлекаем блюда
+            # Завтраки — читаем до салатов/холодных закусок (детально)
+            logger.info("Извлечение (завтраки): функция=extract_dishes_from_excel_rows_with_stop, start=['ЗАВТРАК'], stop=['САЛАТЫ','ХОЛОДНЫЕ','ЗАКУСКИ']")
+            breakfasts: List[DishItem] = []
+            try:
+                breakfasts = extract_dishes_from_excel_rows_with_stop(
+                    source_menu_path,
+                    ["ЗАВТРАК"],
+                    ["САЛАТЫ", "ХОЛОДНЫЕ", "ЗАКУСКИ"],
+                )
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("Завтраки (raw): " + ", ".join([getattr(x, 'name', '') for x in breakfasts]))
+                logger.info(f"Найдено завтраков (raw): {len(breakfasts)}")
+            except Exception as e:
+                logger.warning(f"Не удалось извлечь завтраки: {e}")
+                breakfasts = []
+            # Fallback: берём детальные завтраки из активного листа (если построчно не нашлось)
+            if not breakfasts:
+                try:
+                    details = self.extract_dishes_with_details(source_menu_path)
+                    br = details.get('завтрак', []) if isinstance(details, dict) else []
+                    breakfasts = [DishItem(name=d.get('name',''), weight=d.get('weight',''), price=d.get('price','')) for d in br if d.get('name')]
+                    logger.info(f"Завтраки (fallback по деталям): {len(breakfasts)}")
+                except Exception as e:
+                    logger.warning(f"Fallback завтраков не удался: {e}")
+
+            # Первые блюда (супы) — детально
+            logger.info("Извлечение (первые блюда): функция=extract_dishes_from_excel, keywords=['ПЕРВЫЕ БЛЮДА','ПЕРВЫЕ']")
+            soups: List[DishItem] = []
+            try:
+                soups = extract_dishes_from_excel(source_menu_path, ["ПЕРВЫЕ БЛЮДА", "ПЕРВЫЕ"])
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("Супы (raw): " + ", ".join([getattr(x, 'name', '') for x in soups]))
+                logger.info(f"Найдено первых блюд (raw): {len(soups)}")
+            except Exception as e:
+                logger.warning(f"Не удалось извлечь первые блюда: {e}")
+                soups = []
+
+            # Мясные блюда — детально
+            logger.info("Извлечение (мясо): функция=extract_dishes_from_excel, keywords=['БЛЮДА ИЗ МЯСА','МЯСНЫЕ БЛЮДА']")
+            meats: List[DishItem] = []
+            try:
+                meats = extract_dishes_from_excel(source_menu_path, ["БЛЮДА ИЗ МЯСА", "МЯСНЫЕ БЛЮДА"])
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("Мясо (raw): " + ", ".join([getattr(x, 'name', '') for x in meats]))
+                logger.info(f"Найдено мясных блюд (raw): {len(meats)}")
+            except Exception as e:
+                logger.warning(f"Не удалось извлечь мясные блюда: {e}")
+                meats = []
+
+            # Блюда из птицы — детально
+            logger.info("Извлечение (птица): функция=extract_dishes_from_excel, keywords=['БЛЮДА ИЗ ПТИЦЫ','БЛЮДА ИЗ КУРИЦЫ','КУРИНЫЕ БЛЮДА']")
+            poultry: List[DishItem] = []
+            try:
+                poultry = extract_dishes_from_excel(source_menu_path, ["БЛЮДА ИЗ ПТИЦЫ", "БЛЮДА ИЗ КУРИЦЫ", "КУРИНЫЕ БЛЮДА"])
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("Птица (raw): " + ", ".join([getattr(x, 'name', '') for x in poultry]))
+                logger.info(f"Найдено блюд из птицы (raw): {len(poultry)}")
+            except Exception as e:
+                logger.warning(f"Не удалось извлечь блюда из птицы: {e}")
+                poultry = []
+
+            # Рыба — детально
+            logger.info("Извлечение (рыба): функция=extract_dishes_from_excel, keywords=['БЛЮДА ИЗ РЫБЫ','РЫБНЫЕ БЛЮДА']")
+            fish: List[DishItem] = []
+            try:
+                fish = extract_dishes_from_excel(source_menu_path, ["БЛЮДА ИЗ РЫБЫ", "РЫБНЫЕ БЛЮДА"])
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("Рыба (raw): " + ", ".join([getattr(x, 'name', '') for x in fish]))
+                logger.info(f"Найдено рыбных блюд (raw): {len(fish)}")
+            except Exception as e:
+                logger.warning(f"Не удалось извлечь рыбные блюда: {e}")
+                fish = []
+
+            # Гарниры — детально
+            logger.info("Извлечение (гарниры): функция=extract_dishes_from_excel, keywords=['ГАРНИРЫ','ГАРНИР']")
+            garnirs: List[DishItem] = []
+            try:
+                garnirs = extract_dishes_from_excel(source_menu_path, ["ГАРНИРЫ", "ГАРНИР"])
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("Гарниры (raw): " + ", ".join([getattr(x, 'name', '') for x in garnirs]))
+                logger.info(f"Найдено гарниров (raw): {len(garnirs)}")
+            except Exception as e:
+                logger.warning(f"Не удалось извлечь гарниры: {e}")
+                garnirs = []
+
+            # Салаты — детально (построчно до следующей категории)
+            logger.info("Извлечение (салаты): функция=extract_dishes_from_excel_rows_with_stop, start=['САЛАТЫ','ЗАКУСК'], stop=['ПЕРВЫЕ','БЛЮДА ИЗ','ГАРНИР','НАПИТ']")
+            salads: List[DishItem] = []
+            try:
+                salads = extract_dishes_from_excel_rows_with_stop(
+                    source_menu_path,
+                    ["САЛАТ"],
+                    ["ПЕРВЫЕ", "БЛЮДА ИЗ", "ГАРНИР", "НАПИТ"]
+                )
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("Салаты (raw): " + ", ".join([getattr(x, 'name', '') for x in salads]))
+                logger.info(f"Найдено салатов (raw): {len(salads)}")
+            except Exception as e:
+                logger.warning(f"Не удалось извлечь салаты: {e}")
+                salads = []
+            # Fallback по деталям, если не нашли построчно
+            if not salads:
+                try:
+                    details = self.extract_dishes_with_details(source_menu_path)
+                    sd = details.get('салат', []) if isinstance(details, dict) else []
+                    salads = [DishItem(name=d.get('name',''), weight=d.get('weight',''), price=d.get('price','')) for d in sd if d.get('name')]
+                    logger.info(f"Салаты (fallback по деталям): {len(salads)}")
+                except Exception as e:
+                    logger.warning(f"Fallback салатов не удался: {e}")
+
+            # Выравниваем категории по логике бракеражного журнала
+            try:
+                from app.reports.brokerage_journal import BrokerageJournalGenerator
+                gen = BrokerageJournalGenerator()
+                cat_names = gen.extract_categorized_dishes(source_menu_path)
+            except Exception as e:
+                logger.warning(f"Не удалось получить категории из бракеражного журнала: {e}")
+                cat_names = {}
+
+            def _norm(s: str) -> str:
+                return ' '.join(str(s).lower().replace('ё', 'е').split())
+
+            def _tokenize(s: str) -> List[str]:
+                s = _norm(s)
+                # Разбиваем по пробелам и символам '/','-','(',')',','
+                for ch in ['/','-','(',')',',',';']:
+                    s = s.replace(ch, ' ')
+                toks = [t for t in s.split() if t]
+                return toks
+
+            def _best_match(detailed: List[DishItem], name: str) -> Optional[DishItem]:
+                # Точное совпадение
+                norm = _norm(name)
+                by_norm = { _norm(getattr(di, 'name', '')): di for di in detailed }
+                if norm in by_norm:
+                    return by_norm[norm]
+                # Включение одной строки в другую
+                for di in detailed:
+                    dn = _norm(getattr(di, 'name', ''))
+                    if not dn:
+                        continue
+                    if norm in dn or dn in norm:
+                        return di
+                # По токенам — берём с наибольшим пересечением
+                name_toks = set(_tokenize(name))
+                best = None
+                best_score = 0.0
+                for di in detailed:
+                    dn = getattr(di, 'name', '')
+                    toks = set(_tokenize(dn))
+                    if not toks:
+                        continue
+                    inter = len(name_toks & toks)
+                    if not name_toks:
+                        continue
+                    score = inter / max(1, len(name_toks))
+                    if score > best_score:
+                        best_score = score
+                        best = di
+                if best_score >= 0.6:
+                    return best
+                return None
+
+            def _align(detailed: List[DishItem], names: List[str]) -> List[DishItem]:
+                """Выравнивает по порядку names, стараясь сохранить вес/цену через нестрогое сопоставление."""
+                if not names:
+                    return detailed
+                aligned: List[DishItem] = []
+                for n in names:
+                    if not n or len(str(n).strip()) < 2:
+                        continue
+                    di = _best_match(detailed, n)
+                    if di:
+                        aligned.append(di)
+                    else:
+                        aligned.append(DishItem(name=str(n).strip()))
+                return aligned
+
+            # Завтраки и салаты оставляем как есть (детальные), без выравнивания — чтобы не потерять вес/цену
+            # Остальные категории выравниваем по журналу
+            soups = _align(soups, cat_names.get('первое', []))
+            meats = _align(meats, cat_names.get('мясо', []))
+            poultry = _align(poultry, cat_names.get('птица', []) + cat_names.get('курица', []))
+            fish = _align(fish, cat_names.get('рыба', []))
+            garnirs = _align(garnirs, cat_names.get('гарнир', []))
+
+            logger.info(f"Выравнивание по журналу: завтраки(без выравн.)={len(breakfasts)}, супы={len(soups)}, мясо={len(meats)}, птица={len(poultry)}, рыба={len(fish)}, гарниры={len(garnirs)}, салаты(без выравн.)={len(salads)}")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Завтраки: " + ", ".join([getattr(x, 'name', '') for x in breakfasts]))
+                logger.debug("Супы: " + ", ".join([getattr(x, 'name', '') for x in soups]))
+                logger.debug("Мясо: " + ", ".join([getattr(x, 'name', '') for x in meats]))
+                logger.debug("Птица: " + ", ".join([getattr(x, 'name', '') for x in poultry]))
+                logger.debug("Рыба: " + ", ".join([getattr(x, 'name', '') for x in fish]))
+                logger.debug("Гарниры: " + ", ".join([getattr(x, 'name', '') for x in garnirs]))
+                logger.debug("Салаты: " + ", ".join([getattr(x, 'name', '') for x in salads]))
+
+            # Открываем шаблон и находим лист
+            wb = openpyxl.load_workbook(template_path)
+            ws = None
+            for sheet in wb.worksheets:
+                if 'касс' in sheet.title.lower():
+                    ws = sheet
+                    break
+            if ws is None:
+                ws = wb.active
+
+            # Обновляем дату в шаблоне (если удаётся)
+            self.update_template_date(ws, menu_date)
+
+            total_inserted = 0
+
+            # Завтраки — A/B/C
+            b_start, b_end = breakfast_range
+            # Вставка завтраков: лист, диапазон, колонки
+            logger.info(f"Вставка (завтраки): лист={ws.title}, диапазон=A{b_start}..A{b_end}, колонки=1/2/3, позиций={len(breakfasts)}, overwrite=True")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Завтраки (final): " + ", ".join([f"{getattr(x,'name','')} [{getattr(x,'weight','')}] [{getattr(x,'price','')}]" for x in breakfasts]))
+            total_inserted += fill_cells_sequential(
+                ws,
+                start_row=b_start,
+                stop_row=b_end + 1,
+                columns=TargetColumns(name_col=1, weight_col=2, price_col=3),
+                dishes=breakfasts,
+                replace_only_empty=False,
+                logger=logger,
+                log_context=f"завтраки A{b_start}..A{b_end}"
+            )
+
+            # Супы — D/E/F (до строки 10 включительно). Если D6 — заголовок, начинаем с D7.
+            s_start, s_end = soups_range
+            s_write_start = s_start
+            try:
+                cell_at_start = ws.cell(row=s_start, column=4).value
+                if cell_at_start and ('перв' in str(cell_at_start).lower()):
+                    s_write_start = s_start + 1
+            except Exception:
+                pass
+            # Вставка супов: лист, диапазон, колонки
+            logger.info(f"Вставка (первые блюда): лист={ws.title}, диапазон=D{s_write_start}..D{s_end}, колонки=4/5/6, позиций={len(soups)}, overwrite=True")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Супы (final): " + ", ".join([getattr(x, 'name', '') for x in soups]))
+            total_inserted += fill_cells_sequential(
+                ws,
+                start_row=s_write_start,
+                stop_row=s_end + 1,
+                columns=TargetColumns(name_col=4, weight_col=5, price_col=6),
+                dishes=soups,
+                replace_only_empty=False,
+                logger=logger,
+                log_context=f"первые блюда D{s_write_start}..D{s_end}"
+            )
+
+            # Мясо — D/E/F (после заголовка на D11)
+            m_start, m_end = meat_range
+            # Вставка мяса: лист, диапазон, колонки
+            logger.info(f"Вставка (мясо): лист={ws.title}, диапазон=D{m_start}..D{m_end}, колонки=4/5/6, позиций={len(meats)}, overwrite=True")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Мясо (final): " + ", ".join([getattr(x, 'name', '') for x in meats]))
+            total_inserted += fill_cells_sequential(
+                ws,
+                start_row=m_start,
+                stop_row=m_end + 1,
+                columns=TargetColumns(name_col=4, weight_col=5, price_col=6),
+                dishes=meats,
+                replace_only_empty=False,
+                logger=logger,
+                log_context=f"мясные блюда D{m_start}..D{m_end}"
+            )
+
+            # Птица — найдём диапазон по заголовку "БЛЮДА ИЗ ПТИЦЫ/КУРИЦЫ"; если не нашли — ставим после мяса
+            try:
+                poultry_start = self.find_data_start_row(ws, 4, 'птица')
+                # Проверяем, что действительно заголовок птицы, иначе fallback
+                header_cell = ws.cell(row=poultry_start-1, column=4).value if poultry_start > 1 else None
+                if not header_cell or not any(k in str(header_cell).lower() for k in ['птиц', 'куриц']):
+                    poultry_start = m_end + 2
+                poultry_end = self.find_category_end_row(ws, 4, poultry_start, 'птица')
+                logger.info(f"Вставка (птица): лист={ws.title}, диапазон=D{poultry_start}..D{poultry_end}, колонки=4/5/6, позиций={len(poultry)}, overwrite=True")
+                total_inserted += fill_cells_sequential(
+                    ws,
+                    start_row=poultry_start,
+                    stop_row=poultry_end + 1,
+                    columns=TargetColumns(name_col=4, weight_col=5, price_col=6),
+                    dishes=poultry,
+                    replace_only_empty=False,
+                    logger=logger,
+                    log_context=f"птица D{poultry_start}..D{poultry_end}"
+                )
+            except Exception as e:
+                logger.warning(f"Пропуск вставки блюд из птицы из-за ошибки: {e}")
+
+            # Рыба — найдём диапазон по заголовку "БЛЮДА ИЗ РЫБЫ"
+            try:
+                fish_start = self.find_data_start_row(ws, 4, 'рыба')
+                fish_end = self.find_category_end_row(ws, 4, fish_start, 'рыба')
+                logger.info(f"Вставка (рыба): лист={ws.title}, диапазон=D{fish_start}..D{fish_end}, колонки=4/5/6, позиций={len(fish)}, overwrite=True")
+                total_inserted += fill_cells_sequential(
+                    ws,
+                    start_row=fish_start,
+                    stop_row=fish_end + 1,
+                    columns=TargetColumns(name_col=4, weight_col=5, price_col=6),
+                    dishes=fish,
+                    replace_only_empty=False,
+                    logger=logger,
+                    log_context=f"рыба D{fish_start}..D{fish_end}"
+                )
+            except Exception as e:
+                logger.warning(f"Пропуск вставки рыбы из-за ошибки: {e}")
+
+            # Гарниры — найдём диапазон по заголовку "ГАРНИРЫ"
+            try:
+                garn_start = self.find_data_start_row(ws, 4, 'гарнир')
+                garn_end = self.find_category_end_row(ws, 4, garn_start, 'гарнир')
+                logger.info(f"Вставка (гарниры): лист={ws.title}, диапазон=D{garn_start}..D{garn_end}, колонки=4/5/6, позиций={len(garnirs)}, overwrite=True")
+                total_inserted += fill_cells_sequential(
+                    ws,
+                    start_row=garn_start,
+                    stop_row=garn_end + 1,
+                    columns=TargetColumns(name_col=4, weight_col=5, price_col=6),
+                    dishes=garnirs,
+                    replace_only_empty=False,
+                    logger=logger,
+                    log_context=f"гарниры D{garn_start}..D{garn_end}"
+                )
+            except Exception as e:
+                logger.warning(f"Пропуск вставки гарниров из-за ошибки: {e}")
+
+            # Салаты — вставляем в левую колонку A после заголовка "САЛАТЫ..." и ниже блока завтраков
+            try:
+                salads_start = self.find_data_start_row(ws, 1, 'салат')
+                salads_end = self.find_category_end_row(ws, 1, salads_start, 'салат')
+                safe_start = max(salads_start, b_end + 1)
+                logger.info(f"Вставка (салаты): лист={ws.title}, диапазон=A{safe_start}..A{salads_end}, колонки=1/2/3, позиций={len(salads)}, overwrite=True")
+                total_inserted += fill_cells_sequential(
+                    ws,
+                    start_row=safe_start,
+                    stop_row=salads_end + 1,
+                    columns=TargetColumns(name_col=1, weight_col=2, price_col=3),
+                    dishes=salads,
+                    replace_only_empty=False,
+                    logger=logger,
+                    log_context=f"салаты A{safe_start}..A{salads_end}"
+                )
+            except Exception as e:
+                logger.warning(f"Пропуск вставки салатов из-за ошибки: {e}")
+
+            wb.save(output_path)
+
+            # Итоговое сообщение
+            msg_lines = [
+                "Шаблон меню заполнен по фиксированным диапазонам:",
+                f"  Завтраки: A{b_start}..A{b_end}",
+                f"  Первые блюда: D{s_start}..D{s_end}",
+                f"  Мясные блюда: D{m_start}..D{m_end}",
+                f"Всего добавлено строк: {total_inserted}",
+            ]
+            return True, "\n".join(msg_lines)
+
+        except Exception as e:
+            return False, f"Ошибка при заполнении фиксированных диапазонов: {str(e)}"
+
+    def copy_kassa_rect_A6_F42(self, template_path: str, source_menu_path: str, output_path: str) -> Tuple[bool, str]:
+        """
+        Копирует прямоугольник значений A6..F42 из файла пользователя в такой же прямоугольник шаблона
+        только на листах «Касса/Касс». Оформление и объединения не меняем.
+        """
+        import openpyxl
+        import logging
+        logger = logging.getLogger("menu.template")
+
+        try:
+            if not Path(template_path).exists():
+                return False, f"Шаблон не найден: {template_path}"
+            if not Path(source_menu_path).exists():
+                return False, f"Источник не найден: {source_menu_path}"
+
+            src_wb = openpyxl.load_workbook(source_menu_path, data_only=True)
+            tpl_wb = openpyxl.load_workbook(template_path)
+
+            def find_kassa(ws_list):
+                for sh in ws_list:
+                    if 'касс' in sh.title.lower():
+                        return sh
+                return None
+
+            src_ws = find_kassa(src_wb.worksheets) or src_wb.active
+            tpl_ws = find_kassa(tpl_wb.worksheets) or tpl_wb.active
+
+            # Диапазон
+            r1, r2 = 6, 42
+            c1, c2 = 1, 6  # A..F
+
+            # Очистка целевого диапазона (только значения)
+            for r in range(r1, r2 + 1):
+                for c in range(c1, c2 + 1):
+                    try:
+                        tpl_ws.cell(row=r, column=c).value = None
+                    except AttributeError:
+                        pass  # пропускаем MergedCell
+
+            # Копирование значений из источника
+            copied = 0
+            for r in range(r1, r2 + 1):
+                for c in range(c1, c2 + 1):
+                    v = src_ws.cell(row=r, column=c).value
+                    try:
+                        tpl_ws.cell(row=r, column=c).value = v
+                        copied += 1
+                    except AttributeError:
+                        # если целевая ячейка — не мастер объединения, просто пропускаем
+                        pass
+
+            # Нормализация правой части: имена блюд должны быть в колонке D, вес — в E, цена — в F
+            import re as _re
+            def _is_header(val: str) -> bool:
+                if not val:
+                    return False
+                u = str(val).upper()
+                return any(k in u for k in [
+                    'ПЕРВЫЕ', 'БЛЮДА ИЗ МЯСА', 'БЛЮДА ИЗ ПТИЦЫ', 'БЛЮДА ИЗ РЫБЫ', 'ГАРНИРЫ', 'НАПИТК'
+                ])
+            def _looks_weight(val: str) -> bool:
+                if not val:
+                    return False
+                s = str(val).lower()
+                return _re.search(r'(к?кал|ккал|г|гр|грам|шт|мл|л|кг)', s) is not None
+
+            # Находим все заголовки в колонке D
+            header_rows = []
+            for rr in range(r1, r2 + 1):
+                dv = tpl_ws.cell(row=rr, column=4).value  # D
+                if _is_header(dv):
+                    header_rows.append(rr)
+            header_rows.append(r2 + 1)  # хвост
+
+            # Для каждого блока после заголовка приводим D/E/F к схеме: D=название, E=вес, F=цена (если есть)
+            def _is_dish_like(val) -> bool:
+                if val in (None, ''):
+                    return False
+                s = str(val).strip()
+                if not s:
+                    return False
+                if _is_header(s):
+                    return False
+                if _looks_weight(s):
+                    return False
+                return True
+            def _is_price_like(val) -> bool:
+                if val in (None, ''):
+                    return False
+                s = str(val)
+                # число или варианты через '/'
+                return _re.search(r"^\s*\d+(?:[\.,]\d{1,2})?(?:\s*/\s*\d+(?:[\.,]\d{1,2})?)*\s*$", s) is not None
+
+            for i in range(len(header_rows) - 1):
+                start = header_rows[i] + 1
+                end = header_rows[i+1] - 1
+                if start < r1:
+                    start = r1
+                if end > r2:
+                    end = r2
+                for rr in range(start, end + 1):
+                    d = tpl_ws.cell(row=rr, column=4).value
+                    e = tpl_ws.cell(row=rr, column=5).value
+                    f = tpl_ws.cell(row=rr, column=6).value
+                    d_is_dish = _is_dish_like(d)
+                    e_is_dish = _is_dish_like(e)
+                    d_is_w = _looks_weight(d)
+                    e_is_w = _looks_weight(e)
+                    f_is_w = _looks_weight(f)
+                    f_is_p = _is_price_like(f)
+
+                    # Если D не блюдо, а E похоже на блюдо — переносим E->D
+                    if (not d_is_dish) and e_is_dish:
+                        new_d = e
+                        # Вес берем из D (если там вес) или из F (если там вес), иначе оставляем как есть из E, если это вес
+                        new_e = ''
+                        if d_is_w:
+                            new_e = d
+                        elif f_is_w:
+                            new_e = f
+                        elif e_is_w:
+                            new_e = e
+                        # Цена — если F выглядит как цена, оставляем в F; иначе не трогаем
+                        try:
+                            tpl_ws.cell(row=rr, column=4).value = new_d
+                        except AttributeError:
+                            pass
+                        try:
+                            tpl_ws.cell(row=rr, column=5).value = new_e
+                        except AttributeError:
+                            pass
+                        # F оставляем как есть (может быть ценой)
+                        continue
+
+                    # Если D пусто, а E пусто, но F похоже на блюдо — F->D
+                    if (d in (None, '')) and (e in (None, '')) and _is_dish_like(f):
+                        try:
+                            tpl_ws.cell(row=rr, column=4).value = f
+                        except AttributeError:
+                            pass
+                        try:
+                            tpl_ws.cell(row=rr, column=5).value = ''
+                        except AttributeError:
+                            pass
+                        continue
+
+                    # Если D — вес, а E — не вес (скорее блюдо) — обмен местами
+                    if d_is_w and not e_is_w and e not in (None, ''):
+                        try:
+                            tpl_ws.cell(row=rr, column=4).value = e
+                        except AttributeError:
+                            pass
+                        try:
+                            tpl_ws.cell(row=rr, column=5).value = d
+                        except AttributeError:
+                            pass
+                        continue
+
+            tpl_wb.save(output_path)
+            logger.info(f"Скопировано {copied} ячеек в диапазон A6..F42 (лист: {tpl_ws.title}); нормализация колонок D/E/F выполнена")
+            return True, f"Скопировано {copied} ячеек в A6..F42 (нормализация D/E/F)"
+        except Exception as e:
+            return False, f"Ошибка при копировании A6..F42: {str(e)}"
+
+    def fill_kassa_with_counts(
+        self,
+        template_path: str,
+        source_menu_path: str,
+        output_path: str,
+        counts: Optional[Dict[str, int]] = None,
+        breakfast_range: Tuple[int, int] = (7, 27),
+    ) -> Tuple[bool, str]:
+        """
+        Заполняет ТОЛЬКО лист «Касса» фиксированным количеством блюд по категориям.
+        Количества по умолчанию:
+          - супы: 4; рыба: 4; мясо: 6; курица/птица: 6; гарниры: 9; салаты: 13.
+        Завтраки — диапазон A7..A27 (A/B/C).
+        """
+        import openpyxl
+        import logging
+        logger = logging.getLogger("menu.template")
+        from app.services.excel_inserter import fill_cells_sequential, TargetColumns
+
+        # Значения по умолчанию
+        if counts is None:
+            counts = {
+                'soups': 4,
+                'fish': 4,
+                'meat': 6,
+                'poultry': 6,
+                'garnirs': 9,
+                'salads': 13,
+            }
+        
+        # 1) Извлекаем блюда детально (как в фиксированных диапазонах)
+        try:
+            import openpyxl as _ox
+            src_wb = _ox.load_workbook(source_menu_path, data_only=True)
+
+            def _find_sheet(wb, keywords: List[str]):
+                for sh in wb.worksheets:
+                    title = sh.title.lower()
+                    if any(k in title for k in [kw.lower() for kw in keywords]):
+                        return sh
+                return None
+
+            def _sanitize_price(raw) -> str:
+                if raw is None:
+                    return ""
+                s = str(raw)
+                parts = [p.strip() for p in s.split('/')]
+                out = []
+                import re as _re
+                for p in parts:
+                    m = _re.search(r"(\d+(?:[\.,]\d{1,2})?)", p)
+                    if not m:
+                        continue
+                    num = m.group(1).replace('.', ',')
+                    out.append(num)
+                return "/".join(out)
+
+            def _read_items_from_sheet(sh, limit: int) -> List[DishItem]:
+                items: List[DishItem] = []
+                header_tokens = ['завтрак', 'салат', 'вес', 'ед.изм', 'ед. изм', 'цена', 'руб']
+                for r in range(1, sh.max_row + 1):
+                    w = sh.cell(row=r, column=1).value
+                    n = sh.cell(row=r, column=2).value
+                    p = sh.cell(row=r, column=3).value
+                    name = (str(n).strip() if n else '')
+                    if not name:
+                        continue
+                    n_low = name.lower()
+                    w_low = (str(w).lower() if isinstance(w, str) else str(w).lower()) if w not in (None, '') else ''
+                    p_low = (str(p).lower() if isinstance(p, str) else str(p).lower()) if p not in (None, '') else ''
+                    # Пропускаем шапки/заголовки
+                    if any(tok in n_low for tok in header_tokens) or any(tok in w_low for tok in header_tokens) or any(tok in p_low for tok in header_tokens):
+                        continue
+                    weight = str(w).strip() if w else ''
+                    price = _sanitize_price(p)
+                    items.append(DishItem(name=name, weight=weight, price=price))
+                    if len(items) >= limit:
+                        break
+                return items
+
+            # Завтраки — сначала пробуем читать напрямую с листа «Завтрак» (col0/1/2), затем извлекатели
+            breakfasts: List[DishItem] = []
+            try:
+                br_sh = _find_sheet(src_wb, ["завтрак"])
+                if br_sh is not None:
+                    br_limit = max(0, breakfast_range[1] - breakfast_range[0] + 1)
+                    breakfasts = _read_items_from_sheet(br_sh, br_limit)
+            except Exception:
+                breakfasts = []
+            if not breakfasts:
+                try:
+                    breakfasts = extract_dishes_from_excel_rows_with_stop(
+                        source_menu_path,
+                        ["ЗАВТРАК"],
+                        ["САЛАТЫ", "ХОЛОДНЫЕ", "ЗАКУСКИ"],
+                    )
+                except Exception:
+                    breakfasts = []
+            if not breakfasts:
+                try:
+                    details = self.extract_dishes_with_details(source_menu_path)
+                    br = details.get('завтрак', []) if isinstance(details, dict) else []
+                    breakfasts = [DishItem(name=d.get('name',''), weight=d.get('weight',''), price=d.get('price','')) for d in br if d.get('name')]
+                except Exception:
+                    breakfasts = []
+
+            # Остальные категории (базово — извлекатели)
+            soups = extract_dishes_from_excel(source_menu_path, ["ПЕРВЫЕ БЛЮДА", "ПЕРВЫЕ"]) or []
+            meat = extract_dishes_from_excel(source_menu_path, ["БЛЮДА ИЗ МЯСА", "МЯСНЫЕ БЛЮДА"]) or []
+            fish = extract_dishes_from_excel(source_menu_path, ["БЛЮДА ИЗ РЫБЫ", "РЫБНЫЕ БЛЮДА"]) or []
+
+            # «По такому же принципу»: если в источнике есть листы для этих категорий — читаем напрямую из листов (col0/1/2)
+            poultry_sh = _find_sheet(src_wb, ["птиц", "куриц"])
+            garnir_sh = _find_sheet(src_wb, ["гарнир"])
+            salads_sh = _find_sheet(src_wb, ["салат"])
+
+            poultry = _read_items_from_sheet(poultry_sh, 6) if poultry_sh is not None else extract_dishes_from_excel(source_menu_path, ["БЛЮДА ИЗ ПТИЦЫ", "БЛЮДА ИЗ КУРИЦЫ", "КУРИНЫЕ БЛЮДА"]) or []
+            garnirs = _read_items_from_sheet(garnir_sh, 9) if garnir_sh is not None else extract_dishes_from_excel(source_menu_path, ["ГАРНИРЫ", "ГАРНИР"]) or []
+            salads = _read_items_from_sheet(salads_sh, 13) if salads_sh is not None else extract_dishes_from_excel_rows_with_stop(
+                source_menu_path,
+                ["САЛАТ"],
+                ["ПЕРВЫЕ", "БЛЮДА ИЗ", "ГАРНИР", "НАПИТ"]
+            ) or []
+        except Exception as e:
+            return False, f"Ошибка извлечения блюд: {e}"
+
+        # Ограничиваем по количеству
+        def take(lst: List[DishItem], n: int) -> List[DishItem]:
+            return lst[:max(0, n)] if lst else []
+
+        soups = take(soups, counts.get('soups', 4))
+        fish = take(fish, counts.get('fish', 4))
+        meat = take(meat, counts.get('meat', 6))
+        poultry = take(poultry, counts.get('poultry', 6))
+        garnirs = take(garnirs, counts.get('garnirs', 9))
+        salads = take(salads, counts.get('salads', 13))
+
+        # 2) Загружаем шаблон и работаем ТОЛЬКО с листом «Касса»
+        wb = openpyxl.load_workbook(template_path)
+        ws = None
+        for sh in wb.worksheets:
+            if 'касс' in sh.title.lower():
+                ws = sh
+                break
+        if ws is None:
+            ws = wb.active
+        
+        # Обновляем дату
+        self.update_template_date(ws, self.extract_date_from_menu(source_menu_path))
+
+        # Утилиты
+        def clear_rect(start_row: int, rows: int, name_col: int, weight_col: int, price_col: int):
+            end_row = start_row + rows - 1
+            for r in range(start_row, end_row + 1):
+                for c in (name_col, weight_col, price_col):
+                    try:
+                        ws.cell(row=r, column=c).value = None
+                    except AttributeError:
+                        pass
+            return end_row
+
+        def write_list(start_row: int, items: List[DishItem], name_col: int, weight_col: int, price_col: int):
+            return fill_cells_sequential(
+                ws,
+                start_row=start_row,
+                stop_row=start_row + len(items),
+                columns=TargetColumns(name_col=name_col, weight_col=weight_col, price_col=price_col),
+                dishes=items,
+                replace_only_empty=False,
+                logger=logger,
+            )
+
+        inserted_total = 0
+
+        # 3) Завтраки A/B/C: A7..A27 (по правилу)
+        br_start, br_end = breakfast_range
+        # Очистка
+        clear_rect(br_start, br_end - br_start + 1, 1, 2, 3)
+        # Запись (обрезаем по диапазону)
+        if breakfasts:
+            max_rows = br_end - br_start + 1
+            breakfasts = breakfasts[:max_rows]
+            inserted_total += write_list(br_start, breakfasts, 1, 2, 3)
+
+        # 4) Супы D/E/F — начиная от заголовка «ПЕРВЫЕ БЛЮДА», строго 4
+        try:
+            s_start = self.find_data_start_row(ws, 4, 'первое')
+            clear_rect(s_start, len(soups), 4, 5, 6)
+            inserted_total += write_list(s_start, soups, 4, 5, 6)
+        except Exception:
+            pass
+
+        # 5) Мясо D/E/F — от заголовка «БЛЮДА ИЗ МЯСА», 6
+        try:
+            m_start = self.find_data_start_row(ws, 4, 'мясо')
+            clear_rect(m_start, len(meat), 4, 5, 6)
+            inserted_total += write_list(m_start, meat, 4, 5, 6)
+        except Exception:
+            pass
+
+        # 6) Птица D/E/F — от заголовка «БЛЮДА ИЗ ПТИЦЫ/КУРИЦЫ», 6
+        try:
+            p_start = self.find_data_start_row(ws, 4, 'птица')
+            clear_rect(p_start, len(poultry), 4, 5, 6)
+            inserted_total += write_list(p_start, poultry, 4, 5, 6)
+        except Exception:
+            pass
+
+        # 7) Рыба D/E/F — от заголовка «БЛЮДА ИЗ РЫБЫ», 4
+        try:
+            f_start = self.find_data_start_row(ws, 4, 'рыба')
+            clear_rect(f_start, len(fish), 4, 5, 6)
+            inserted_total += write_list(f_start, fish, 4, 5, 6)
+        except Exception:
+            pass
+
+        # 8) Гарниры D/E/F — от заголовка «ГАРНИРЫ», 9
+        try:
+            g_start = self.find_data_start_row(ws, 4, 'гарнир')
+            clear_rect(g_start, len(garnirs), 4, 5, 6)
+            inserted_total += write_list(g_start, garnirs, 4, 5, 6)
+        except Exception:
+            pass
+
+        # 9) Салаты A/B/C — от заголовка «САЛАТЫ...», 13, но не раньше, чем после завтраков
+        try:
+            sl_start = self.find_data_start_row(ws, 1, 'салат')
+            sl_start = max(sl_start, br_end + 1)
+            clear_rect(sl_start, len(salads), 1, 2, 3)
+            inserted_total += write_list(sl_start, salads, 1, 2, 3)
+        except Exception:
+            pass
+
+        wb.save(output_path)
+        return True, f"Заполнено строк: {inserted_total} (Касса, фиксированные количества)"
 
 
 def fill_menu_template_from_source(template_path: str, source_menu_path: str, output_path: str) -> Tuple[bool, str]:
