@@ -544,38 +544,46 @@ class MenuTemplateFiller:
         """Извлекает дату из файла меню (используем уже готовую логику)"""
         return extract_date_from_menu(menu_path)
     
-    def update_template_date(self, ws, menu_date: Optional[datetime]):
-        """Обновляет дату в шаблоне"""
+    def update_template_date(self, ws, menu_date: Optional[datetime], include_weekday: bool = True):
+        """Обновляет дату (и при необходимости день недели) в верхних строках шаблона.
+        По требованиям: день недели пишется в B2, а «число» (день месяца) — в B3.
+        Если эти ячейки недоступны, используем поиск по верхнему блоку.
+        """
         if not menu_date:
             menu_date = datetime.now()
-        
-        # Ищем ячейки с датой в первых строках
+        russian_months = {
+            1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля', 5: 'мая', 6: 'июня',
+            7: 'июля', 8: 'августа', 9: 'сентября', 10: 'октября', 11: 'ноября', 12: 'декабря'
+        }
+        weekday_names = {
+            0: 'понедельник', 1: 'вторник', 2: 'среда', 3: 'четверг', 4: 'пятница', 5: 'суббота', 6: 'воскресенье'
+        }
+        # 1) Пытаемся записать строго в B2 (день недели) и B3 (число)
+        try:
+            ws.cell(row=2, column=2).value = weekday_names.get(menu_date.weekday(), '')  # B2: день недели
+            ws.cell(row=3, column=2).value = f"{menu_date.day} {russian_months.get(menu_date.month, 'сентября')}"  # B3: число и месяц
+            return
+        except Exception:
+            pass
+        # 2) Фолбек: перезапись ближайшей ячейки с месяцем в верхнем блоке
+        base = f"{menu_date.day} {russian_months.get(menu_date.month, 'сентября')}"
+        full = f"{base} - {weekday_names.get(menu_date.weekday(), '')}" if include_weekday else base
         for row in range(1, min(6, ws.max_row + 1)):
-            for col in range(1, min(5, ws.max_column + 1)):
+            for col in range(1, min(11, ws.max_column + 1)):
                 cell = ws.cell(row=row, column=col)
                 cell_val = cell.value
-                if cell_val:
-                    cell_text = str(cell_val).lower()
-                    # Если в ячейке есть упоминание месяца или это похоже на дату
-                    if any(month in cell_text for month in ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 
-                                                            'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь']):
-                        # Обновляем дату
-                        russian_months = {
-                            1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля', 5: 'мая', 6: 'июня',
-                            7: 'июля', 8: 'августа', 9: 'сентября', 10: 'октября', 11: 'ноября', 12: 'декабря'
-                        }
-                        date_str = f"{menu_date.day} {russian_months.get(menu_date.month, 'сентября')}"
-                        
-                        # Проверяем, не является ли ячейка объединенной MergedCell
-                        if cell.__class__.__name__ == 'MergedCell':
-                            continue  # Пропускаем объединенные ячейки
-                        
-                        try:
-                            cell.value = date_str
-                            return
-                        except AttributeError:
-                            # Если не можем записать, продолжаем поиск
-                            continue
+                if not cell_val:
+                    continue
+                cell_text = str(cell_val).lower()
+                if any(month in cell_text for month in ['январ', 'феврал', 'март', 'апрел', 'май', 'июн',
+                                                        'июл', 'август', 'сентябр', 'октябр', 'ноябр', 'декабр']):
+                    if cell.__class__.__name__ == 'MergedCell':
+                        continue
+                    try:
+                        cell.value = full
+                        return
+                    except AttributeError:
+                        continue
     
     def fill_menu_template(self, template_path: str, source_menu_path: str, output_path: str) -> Tuple[bool, str]:
         """
@@ -1513,9 +1521,47 @@ class MenuTemplateFiller:
                             pass
                         continue
 
+            # Обновляем дату в верхней части «Кассы» из источника (добавляем день недели)
+            try:
+                menu_date = self.extract_date_from_menu(source_menu_path)
+                self.update_template_date(tpl_ws, menu_date, include_weekday=True)
+            except Exception:
+                pass
+
+            # Ссылки для ХЦ: A19/A20 должны указывать на «Цезарь …» из салатов на «Касса» и делиться по «/»
+            try:
+                # Находим строку с «цезар» в колонке A (салаты) на Кассе в диапазоне A6..A42
+                caesar_row = None
+                for rr in range(6, 43):
+                    val = tpl_ws.cell(row=rr, column=1).value  # A
+                    if val and 'цезар' in str(val).lower():
+                        caesar_row = rr
+                        break
+                if caesar_row:
+                    # Ищем лист «Хц/ХЦ»
+                    hx_ws = None
+                    for sh in tpl_wb.worksheets:
+                        if 'хц' in sh.title.lower():
+                            hx_ws = sh
+                            break
+                    if hx_ws is not None:
+                        ref = f"Касса!A{caesar_row}"
+                        # A19: часть до «/»
+                        f1 = f"=IFERROR(TRIM(LEFT({ref}, IFERROR(FIND(\"/\", {ref})-1, LEN({ref})))), {ref})"
+                        # A20: часть после «/»
+                        f2 = f"=IFERROR(TRIM(MID({ref}, FIND(\"/\", {ref})+1, 999)), \"\")"
+                        try:
+                            hx_ws.cell(row=19, column=1).value = f1
+                            hx_ws.cell(row=20, column=1).value = f2
+                            logger.info(f"Хц: A19/A20 привязаны к {ref} и делятся по '/' формулой")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
             tpl_wb.save(output_path)
-            logger.info(f"Скопировано {copied} ячеек в диапазон A6..F42 (лист: {tpl_ws.title}); нормализация колонок D/E/F выполнена")
-            return True, f"Скопировано {copied} ячеек в A6..F42 (нормализация D/E/F)"
+            logger.info(f"Скопировано {copied} ячеек в диапазон A6..F42 (лист: {tpl_ws.title}); нормализация колонок D/E/F выполнена; дата обновлена; ссылки ХЦ установлены")
+            return True, f"Скопировано {copied} ячеек в A6..F42; дата обновлена; ссылки ХЦ установлены"
         except Exception as e:
             return False, f"Ошибка при копировании A6..F42: {str(e)}"
 
