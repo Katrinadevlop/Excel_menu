@@ -328,27 +328,26 @@ def create_presentation_with_excel_data(template_path: str, excel_path: str, out
         
         print(f"🔍 Ищем первые блюда в файле: {excel_path}")
         first_courses = extract_first_courses_from_excel(excel_path)
-        print(f"Первые блюда: найдено {len(first_courses)} блюд")
+        if len(first_courses) == 0:
+            # Фолбек на универсальный извлекатель
+            first_courses = extract_dishes_from_excel(excel_path, ['ПЕРВЫЕ БЛЮДА', 'ПЕРВЫЕ'])
         
-        print(f"🔍 Ищем блюда из мяса в файле: {excel_path}")
         meat_dishes = extract_meat_dishes_from_excel(excel_path)
-        print(f"Блюда из мяса: найдено {len(meat_dishes)} блюд")
+        if len(meat_dishes) == 0:
+            meat_dishes = extract_dishes_from_excel(excel_path, ['БЛЮДА ИЗ МЯСА', 'МЯСНЫЕ БЛЮДА'])
         
-        print(f"🔍 Ищем блюда из птицы в файле: {excel_path}")
         poultry_dishes = extract_poultry_dishes_from_excel(excel_path)
-        print(f"Блюда из птицы: найдено {len(poultry_dishes)} блюд")
+        if len(poultry_dishes) == 0:
+            poultry_dishes = extract_dishes_from_excel(excel_path, ['БЛЮДА ИЗ ПТИЦЫ', 'БЛЮДА ИЗ КУРИЦЫ', 'КУРИНЫЕ БЛЮДА'])
         
-        print(f"🔍 Ищем рыбные блюда из столбца E в файле: {excel_path}")
         fish_dishes = extract_fish_dishes_from_column_e(excel_path)
-        print(f"Рыбные блюда: найдено {len(fish_dishes)} блюд")
         if len(fish_dishes) == 0:
-            print("Пробуем альтернативный поиск рыбных блюд...")
             fish_dishes = extract_fish_dishes_from_excel(excel_path)
-            print(f"Рыбные блюда (альтернативный поиск): найдено {len(fish_dishes)} блюд")
         
-        print(f"🔍 Ищем гарниры в файле: {excel_path}")
         side_dishes = extract_side_dishes_from_excel(excel_path)
-        print(f"Гарниры: найдено {len(side_dishes)} блюд")
+        if len(side_dishes) == 0:
+            side_dishes = extract_dishes_from_excel(excel_path, ['ГАРНИРЫ', 'ГАРНИР'])
+        
         
         total_dishes = len(salads) + len(first_courses) + len(meat_dishes) + len(poultry_dishes) + len(fish_dishes) + len(side_dishes)
         if total_dishes == 0:
