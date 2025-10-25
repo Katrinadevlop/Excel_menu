@@ -6,6 +6,12 @@ from typing import List, Tuple, Optional
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 from dataclasses import dataclass
+from app.services.dish_extractor import (
+    extract_first_courses_from_range,
+    extract_meat_dishes_from_range,
+    extract_poultry_dishes_from_range,
+    extract_side_dishes_from_range
+)
 
 
 @dataclass
@@ -13,6 +19,15 @@ class MenuItem:
     name: str
     weight: str
     price: str
+
+
+def convert_dish_item_to_menu_item(dish_item) -> MenuItem:
+    """Преобразует DishItem в MenuItem"""
+    return MenuItem(
+        name=dish_item.name,
+        weight=dish_item.weight,
+        price=dish_item.price
+    )
 
 
 def detect_category_columns(df, category_row: int, category_name: str) -> List[int]:
@@ -1988,19 +2003,22 @@ def create_presentation_with_excel_data(template_path: str, excel_path: str, out
             salads = extract_dishes_from_excel(excel_path, keywords)
             print(f"Салаты (альтернативный поиск): найдено {len(salads)} блюд")
         
-        # Извлекаем первые блюда
-        print(f"🔍 Ищем первые блюда в файле: {excel_path}")
-        first_courses = extract_first_courses_from_excel(excel_path)
+        # Извлекаем первые блюда из диапазона D7:D10 (супы)
+        print(f"🔍 Ищем первые блюда в D7:D10: {excel_path}")
+        first_courses_raw = extract_first_courses_from_range(excel_path)
+        first_courses = [convert_dish_item_to_menu_item(dish) for dish in first_courses_raw]
         print(f"Первые блюда: найдено {len(first_courses)} блюд")
         
-        # Извлекаем блюда из мяса
-        print(f"🔍 Ищем блюда из мяса в файле: {excel_path}")
-        meat_dishes = extract_meat_dishes_from_excel(excel_path)
+        # Извлекаем блюда из мяса из диапазона D12:D17
+        print(f"🔍 Ищем блюда из мяса в D12:D17: {excel_path}")
+        meat_dishes_raw = extract_meat_dishes_from_range(excel_path)
+        meat_dishes = [convert_dish_item_to_menu_item(dish) for dish in meat_dishes_raw]
         print(f"Блюда из мяса: найдено {len(meat_dishes)} блюд")
         
-        # Извлекаем блюда из птицы
-        print(f"🔍 Ищем блюда из птицы в файле: {excel_path}")
-        poultry_dishes = extract_poultry_dishes_from_excel(excel_path)
+        # Извлекаем блюда из птицы из диапазона D19:D24
+        print(f"🔍 Ищем блюда из птицы в D19:D24: {excel_path}")
+        poultry_dishes_raw = extract_poultry_dishes_from_range(excel_path)
+        poultry_dishes = [convert_dish_item_to_menu_item(dish) for dish in poultry_dishes_raw]
         print(f"Блюда из птицы: найдено {len(poultry_dishes)} блюд")
         
         # Извлекаем блюда из рыбы (только рыбные блюда, без гарниров)
@@ -2014,9 +2032,10 @@ def create_presentation_with_excel_data(template_path: str, excel_path: str, out
             fish_dishes = extract_fish_dishes_from_excel(excel_path)
             print(f"Рыбные блюда (альтернативный поиск): найдено {len(fish_dishes)} блюд")
         
-        # Извлекаем гарниры
-        print(f"🔍 Ищем гарниры в файле: {excel_path}")
-        side_dishes = extract_side_dishes_from_excel(excel_path)
+        # Извлекаем гарниры из диапазона D31:D38
+        print(f"🔍 Ищем гарниры в D31:D38: {excel_path}")
+        side_dishes_raw = extract_side_dishes_from_range(excel_path)
+        side_dishes = [convert_dish_item_to_menu_item(dish) for dish in side_dishes_raw]
         print(f"Гарниры: найдено {len(side_dishes)} блюд")
         
         # Проверяем, что хотя бы одна категория найдена

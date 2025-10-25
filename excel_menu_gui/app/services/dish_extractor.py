@@ -1928,6 +1928,134 @@ def extract_side_dishes_from_excel(excel_path: str) -> List[DishItem]:
         return []
 
 
+def extract_dishes_from_cell_range(excel_path: str, start_cell: str, end_cell: str) -> List[DishItem]:
+    """
+    Извлекает блюда из конкретного диапазона ячеек Excel файла.
+    
+    Args:
+        excel_path (str): Путь к Excel-файлу
+        start_cell (str): Начальная ячейка (например, "D7")
+        end_cell (str): Конечная ячейка (например, "D10")
+        
+    Returns:
+        List[DishItem]: Список блюд из указанного диапазона
+    """
+    try:
+        # Выбираем лист с приоритетом "касс"
+        xls = pd.ExcelFile(excel_path)
+        sheet_name = None
+        for nm in xls.sheet_names:
+            if 'касс' in str(nm).strip().lower():
+                sheet_name = nm
+                break
+        if sheet_name is None and xls.sheet_names:
+            sheet_name = xls.sheet_names[0]
+            
+        # Читаем файл
+        df = pd.read_excel(excel_path, sheet_name=sheet_name, header=None, dtype=object)
+        
+        # Парсим диапазон ячеек
+        def parse_cell(cell: str) -> tuple:
+            """Парсит ячейку типа 'D7' в индексы (столбец, строка)"""
+            col_str = ''.join(filter(str.isalpha, cell.upper()))
+            row_str = ''.join(filter(str.isdigit, cell))
+            
+            # Преобразуем букву столбца в индекс (A=0, B=1, C=2, D=3...)
+            col_index = 0
+            for char in col_str:
+                col_index = col_index * 26 + (ord(char) - ord('A') + 1)
+            col_index -= 1  # Преобразуем в 0-based индекс
+            
+            row_index = int(row_str) - 1  # Преобразуем в 0-based индекс
+            
+            return col_index, row_index
+            
+        start_col, start_row = parse_cell(start_cell)
+        end_col, end_row = parse_cell(end_cell)
+        
+        print(f"Извлекаем блюда из диапазона {start_cell}:{end_cell} (столбцы {start_col}-{end_col}, строки {start_row+1}-{end_row+1})")
+        
+        dishes = []
+        
+        # Извлекаем данные из диапазона
+        for row_idx in range(start_row, end_row + 1):
+            if row_idx >= len(df):
+                continue
+                
+            # Получаем данные из столбцов диапазона
+            dish_name = ""
+            dish_weight = ""
+            dish_price = ""
+            
+            # Ищем название в первом столбце диапазона
+            if start_col < len(df.columns) and pd.notna(df.iloc[row_idx, start_col]):
+                name_text = str(df.iloc[row_idx, start_col]).strip()
+                if name_text and len(name_text) > 2 and not name_text.isupper():
+                    dish_name = name_text
+                    
+            # Если нет названия в первом столбце, пропускаем
+            if not dish_name:
+                continue
+                
+            # Ищем вес и цену в соседних столбцах
+            for col_offset in range(1, 3):  # Проверяем следующие 2 столбца
+                col_idx = start_col + col_offset
+                if col_idx < len(df.columns) and pd.notna(df.iloc[row_idx, col_idx]):
+                    cell_text = str(df.iloc[row_idx, col_idx]).strip()
+                    if not cell_text:
+                        continue
+                        
+                    # Определяем, что это - вес или цена
+                    if re.search(r'\d+.*?(г|гр|грамм|мл|л|кг|шт)', cell_text, re.IGNORECASE):
+                        dish_weight = cell_text
+                    elif re.search(r'\d+', cell_text) and not dish_price:
+                        # Цена - число, возможно с валютой
+                        if cell_text.replace('.', '').replace(',', '').isdigit():
+                            dish_price = f"{cell_text} руб."
+                        else:
+                            dish_price = cell_text
+                            
+            # Добавляем блюдо
+            if dish_name:
+                dishes.append(DishItem(name=dish_name, weight=dish_weight, price=dish_price))
+                print(f"Найдено блюдо: {dish_name} | {dish_weight} | {dish_price}")
+                
+        print(f"Всего найдено блюд в диапазоне {start_cell}:{end_cell}: {len(dishes)}")
+        return dishes
+        
+    except Exception as e:
+        print(f"Ошибка при извлечении блюд из диапазона {start_cell}:{end_cell}: {e}")
+        return []
+
+
+def extract_first_courses_from_range(excel_path: str) -> List[DishItem]:
+    """
+    Извлекает первые блюда (супы) из диапазона D7:D10.
+    """
+    return extract_dishes_from_cell_range(excel_path, "D7", "D10")
+
+
+def extract_meat_dishes_from_range(excel_path: str) -> List[DishItem]:
+    """
+    Извлекает блюда из мяса из диапазона D12:D17.
+    """
+    return extract_dishes_from_cell_range(excel_path, "D12", "D17")
+
+
+def extract_poultry_dishes_from_range(excel_path: str) -> List[DishItem]:
+    """
+    Извлекает блюда из птицы из диапазона D19:D24.
+    """
+    return extract_dishes_from_cell_range(excel_path, "D19", "D24")
+
+
+def extract_side_dishes_from_range(excel_path: str) -> List[DishItem]:
+    """
+    Извлекает гарниры из диапазона D31:D38.
+    """
+    return extract_dishes_from_cell_range(excel_path, "D31", "D38")
+
+
 def extract_fish_dishes_from_column_e(excel_path: str) -> List[DishItem]:
     """
     Извлекает рыбные блюда только из диапазона 'БЛЮДА ИЗ РЫБЫ' до 'ГАРНИРЫ',

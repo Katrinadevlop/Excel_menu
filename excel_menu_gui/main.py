@@ -620,7 +620,7 @@ class MainWindow(QMainWindow):
                 return
             
             # Выбираем место сохранения презентации
-            suggested_name = "меню_полное.pptx"
+            suggested_name = "меню - копия.pptx"
             desktop = Path.home() / "Desktop"
             suggested_path = str(desktop / suggested_name)
             
@@ -642,7 +642,8 @@ class MainWindow(QMainWindow):
             )
             
             if success:
-                QMessageBox.information(self, "Готово", f"Презентация со всеми категориями создана!\n{message}\nФайл: {Path(save_path).name}")
+                # Убрано информационное окно при успешном сохранении
+                pass
             else:
                 QMessageBox.warning(self, "Ошибка", f"Не удалось создать презентацию:\n{message}")
                 
@@ -736,7 +737,8 @@ class MainWindow(QMainWindow):
             )
             
             if success:
-                QMessageBox.information(self, "Готово", f"Бракеражный журнал создан!\n{message}\nФайл: {Path(save_path).name}")
+                # Убрано информационное окно при успешном сохранении
+                pass
             else:
                 QMessageBox.warning(self, "Ошибка", f"Не удалось создать бракеражный журнал:\n{message}")
                 
