@@ -1329,6 +1329,90 @@ class MenuTemplateFiller:
         except Exception as e:
             return False, f"Ошибка при заполнении фиксированных диапазонов: {str(e)}"
 
+    def _sort_block(self, ws, start_row: int, end_row: int, name_col: int, weight_col: int, price_col: int) -> int:
+        """Сортирует блок строк по названию блюда (по алфавиту), перенося вместе вес и цену.
+        Пустые строки опускает вниз в пределах блока.
+        """
+        # Считываем элементы
+        items = []
+        for r in range(start_row, end_row + 1):
+            try:
+                n = ws.cell(row=r, column=name_col).value
+            except Exception:
+                n = None
+            try:
+                w = ws.cell(row=r, column=weight_col).value
+            except Exception:
+                w = None
+            try:
+                p = ws.cell(row=r, column=price_col).value
+            except Exception:
+                p = None
+            if n is not None and str(n).strip() != "":
+                items.append((str(n).strip(), w, p))
+
+        # Нормализация для сравнения (без регистра, 'ё' -> 'е')
+        def _norm_name(s: str) -> str:
+            return str(s).strip().lower().replace('ё', 'е')
+
+        items.sort(key=lambda t: _norm_name(t[0]))
+
+        # Записываем обратно и очищаем остаток
+        i = 0
+        written = 0
+        for r in range(start_row, end_row + 1):
+            if i < len(items):
+                name, weight, price = items[i]
+                try:
+                    ws.cell(row=r, column=name_col).value = name
+                except Exception:
+                    pass
+                try:
+                    ws.cell(row=r, column=weight_col).value = weight
+                except Exception:
+                    pass
+                try:
+                    ws.cell(row=r, column=price_col).value = price
+                except Exception:
+                    pass
+                i += 1
+                written += 1
+            else:
+                # Очистка оставшихся строк
+                try:
+                    ws.cell(row=r, column=name_col).value = None
+                except Exception:
+                    pass
+                try:
+                    ws.cell(row=r, column=weight_col).value = None
+                except Exception:
+                    pass
+                try:
+                    ws.cell(row=r, column=price_col).value = None
+                except Exception:
+                    pass
+        return written
+
+    def sort_kassa_ranges(self, ws) -> None:
+        """Сортирует все категории в фиксированных диапазонах на листе «Касса»:
+        - Завтраки: A7..A29
+        - Салаты: A31..A42
+        - Супы: D7..D10
+        - Мясо: D12..D17
+        - Птица: D19..D24
+        - Рыба: D26..D29
+        - Гарниры: D31..D38
+        """
+        # Левая колонка (имя/вес/цена в A/B/C)
+        self._sort_block(ws, start_row=7, end_row=29, name_col=1, weight_col=2, price_col=3)
+        self._sort_block(ws, start_row=31, end_row=42, name_col=1, weight_col=2, price_col=3)
+        # Правая колонка (имя/вес/цена в D/E/F)
+        self._sort_block(ws, start_row=7, end_row=10, name_col=4, weight_col=5, price_col=6)
+        self._sort_block(ws, start_row=12, end_row=17, name_col=4, weight_col=5, price_col=6)
+        self._sort_block(ws, start_row=19, end_row=24, name_col=4, weight_col=5, price_col=6)
+        self._sort_block(ws, start_row=26, end_row=29, name_col=4, weight_col=5, price_col=6)
+        self._sort_block(ws, start_row=31, end_row=38, name_col=4, weight_col=5, price_col=6)
+
     def copy_kassa_rect_A6_F42(self, template_path: str, source_menu_path: str, output_path: str) -> Tuple[bool, str]:
         """
         Копирует прямоугольник значений A6..F42 из файла пользователя в такой же прямоугольник шаблона
@@ -1592,8 +1676,14 @@ class MenuTemplateFiller:
                 except Exception:
                     pass
 
+            # Сортировка категорий в указанных диапазонах
+            try:
+                self.sort_kassa_ranges(tpl_ws)
+            except Exception:
+                pass
+
             tpl_wb.save(output_path)
-            return True, f"Скопировано {copied} ячеек в A6..F42; дата обновлена; ссылки ХЦ установлены; единицы добавлены"
+            return True, f"Скопировано {copied} ячеек в A6..F42; дата обновлена; ссылки ХЦ установлены; единицы добавлены; категории отсортированы"
         except Exception as e:
             return False, f"Ошибка при копировании A6..F42: {str(e)}"
 
