@@ -781,6 +781,50 @@ def extract_dishes_from_excel_column(excel_path: str, category_keywords: List[st
         return []
 
 
+def extract_column_a7_a43_skip_a30(menu_path: str) -> Dict[int, str]:
+    """
+    Возвращает значения из колонки A, строк 7..43 включительно, игнорируя A30.
+    Обрабатывает объединённые ячейки. Пустые значения пропускаются.
+
+    Returns:
+        Dict[int, str]: Словарь {row_index -> text}
+    """
+    try:
+        wb = openpyxl.load_workbook(menu_path, data_only=True)
+        ws = None
+        for sh in wb.worksheets:
+            if 'касс' in sh.title.lower():
+                ws = sh
+                break
+        if ws is None:
+            ws = wb.worksheets[0]
+        result: Dict[int, str] = {}
+        for row_num in range(7, 44):
+            if row_num == 30:
+                continue
+            cell = ws.cell(row=row_num, column=1)
+            val = cell.value
+            if val is None and hasattr(cell, '__class__') and cell.__class__.__name__ == 'MergedCell':
+                try:
+                    for rng in ws.merged_cells.ranges:
+                        if (rng.min_row <= row_num <= rng.max_row and rng.min_col <= 1 <= rng.max_col):
+                            master = ws.cell(row=rng.min_row, column=rng.min_col)
+                            val = master.value
+                            break
+                except Exception:
+                    pass
+            if val is None:
+                continue
+            txt = str(val).strip()
+            if not txt:
+                continue
+            result[row_num] = txt
+        return result
+    except Exception as e:
+        print(f"Ошибка при чтении A7..A43 (skip A30): {e}")
+        return {}
+
+
 def extract_dishes_from_excel(excel_path: str, category_keywords: List[str]) -> List[DishItem]:
     """
     Унифицированный метод извлечения блюд по ключевым словам категории.

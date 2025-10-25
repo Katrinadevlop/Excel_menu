@@ -6,7 +6,7 @@ from datetime import datetime
 import re
 from typing import List, Dict, Optional, Tuple
 
-from app.services.dish_extractor import extract_categorized_dishes_from_menu, extract_date_from_menu, extract_dishes_from_column_d7_d38
+from app.services.dish_extractor import extract_categorized_dishes_from_menu, extract_date_from_menu, extract_dishes_from_column_d7_d38, extract_column_a7_a43_skip_a30
 
 class BrokerageJournalGenerator:
     """Генератор бракеражного журнала на основе меню"""
@@ -107,6 +107,9 @@ class BrokerageJournalGenerator:
             left_list = merged[:37]
             print(f"\nКоличество блюд для левого столбца (A): {len(left_list)}")
             
+            # Также готовим данные для левого столбца A7..A43 напрямую из меню (пропуская A30)
+            a_map = extract_column_a7_a43_skip_a30(menu_path)
+            
             # Открываем шаблон и выбираем целевой лист
             wb = openpyxl.load_workbook(template_path)
             # Ищем лист, где в первых строчках встречается "наименование блюда"; иначе active
@@ -163,14 +166,15 @@ class BrokerageJournalGenerator:
             left_list = [n for n in left_list if not self._should_exclude_by_name(n)]
             # Для правого столбца используем исходный список из D7:D38 без добавок (right_source)
 
-            # Левый столбец: строго A7..A43, принудительная перезапись
-            left_start = 7
-            left_stop = 44  # exclusive, т.е. до A43 включительно
-            # Пишем напрямую в A7..A43 без посредников
+            # Левый столбец A7..A43: прямое копирование из меню, пропуская A30
             inserted_left = 0
-            for idx, name in enumerate(left_list[:37]):
-                ws.cell(row=7 + idx, column=1, value=name)
-                inserted_left += 1
+            for row_idx in range(7, 44):
+                if row_idx == 30:
+                    continue
+                name = a_map.get(row_idx, None)
+                ws.cell(row=row_idx, column=1, value=(name if name else None))
+                if name:
+                    inserted_left += 1
 
             # Правый столбец (G7..G34): жёсткая перезапись списком из D7:D38 (без 4 заголовков)
             inserted_right = 0
