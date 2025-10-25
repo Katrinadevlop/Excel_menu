@@ -166,15 +166,16 @@ class BrokerageJournalGenerator:
             left_list = [n for n in left_list if not self._should_exclude_by_name(n)]
             # Для правого столбца используем исходный список из D7:D38 без добавок (right_source)
 
-            # Левый столбец A7..A43: прямое копирование из меню, пропуская A30
+            # Левый столбец A7..A43: копируем плотно (без пустых строк) из меню, пропуская A30
+            values_a = [a_map[r] for r in sorted(a_map.keys())]
             inserted_left = 0
-            for row_idx in range(7, 44):
-                if row_idx == 30:
-                    continue
-                name = a_map.get(row_idx, None)
-                ws.cell(row=row_idx, column=1, value=(name if name else None))
-                if name:
-                    inserted_left += 1
+            # Плотная запись сверху вниз
+            for idx, name in enumerate(values_a[:37]):  # максимум A7..A43
+                ws.cell(row=7 + idx, column=1, value=name)
+                inserted_left += 1
+            # Очищаем хвост до A43
+            for r in range(7 + inserted_left, 44):
+                ws.cell(row=r, column=1, value=None)
 
             # Правый столбец (G7..G34): жёсткая перезапись списком из D7:D38 (без 4 заголовков)
             inserted_right = 0

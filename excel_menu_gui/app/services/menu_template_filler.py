@@ -1390,8 +1390,14 @@ class MenuTemplateFiller:
             def _looks_weight(val: str) -> bool:
                 if not val:
                     return False
-                s = str(val).lower()
-                return _re.search(r'(к?кал|ккал|г|гр|грам|шт|мл|л|кг)', s) is not None
+                s = str(val).lower().strip()
+                # 1) Явные единицы измерения
+                if _re.search(r'(к?кал|ккал|г|гр|грам|шт|мл|л|кг)', s):
+                    return True
+                # 2) Чисто числовой формат веса, возможно с вариантами через '/': 250 или 250/20 или 0,25
+                if _re.fullmatch(r"\d+(?:[\.,]\d+)?(?:\s*/\s*\d+(?:[\.,]\d+)?)*", s):
+                    return True
+                return False
 
             # Находим все заголовки в колонке D
             header_rows = []
@@ -1522,8 +1528,72 @@ class MenuTemplateFiller:
             except Exception:
                 pass
 
+            # Постобработка: добавить единицы измерения в колонки B и E согласно диапазонам
+            # - Блюда (г): A7..A59 => B7..B59; D7..D38 и D45..D54 => E7..E38, E45..E54
+            # - Напитки (мл): D40..D43 => E40..E43
+            import re as _re
+
+            def _has_unit(text: str) -> bool:
+                if not text:
+                    return False
+                s = str(text).lower()
+                return ('г' in s) or ('мл' in s)
+
+            def _append_unit_to_part(part: str, unit: str) -> str:
+                p = part.strip()
+                if not p:
+                    return p
+                # если уже есть нужные единицы — оставляем
+                if _has_unit(p):
+                    return p
+                # добавляем только если заканчивается на цифру
+                if _re.search(r"\d\s*$", p):
+                    return f"{p}{unit}"
+                return p
+
+            def _ensure_unit(cell_value, unit: str) -> str:
+                if cell_value in (None, ""):
+                    return cell_value
+                s = str(cell_value)
+                # если уже есть г/мл где-либо — не меняем
+                if _has_unit(s):
+                    return s
+                parts = [pp for pp in s.split('/')]
+                new_parts = [_append_unit_to_part(pp, unit) for pp in parts]
+                return '/'.join(new_parts)
+
+            # Левая колонка весов: блюда B7..B59 -> г
+            for rr in range(7, 60):
+                try:
+                    cell = tpl_ws.cell(row=rr, column=2)
+                    new_val = _ensure_unit(cell.value, 'г')
+                    if new_val != cell.value:
+                        cell.value = new_val
+                except Exception:
+                    pass
+
+            # Правая колонка весов: блюда E7..E38 и E45..E54 -> г
+            for rr in list(range(7, 39)) + list(range(45, 55)):
+                try:
+                    cell = tpl_ws.cell(row=rr, column=5)
+                    new_val = _ensure_unit(cell.value, 'г')
+                    if new_val != cell.value:
+                        cell.value = new_val
+                except Exception:
+                    pass
+
+            # Правая колонка весов: напитки E40..E43 -> мл
+            for rr in range(40, 44):
+                try:
+                    cell = tpl_ws.cell(row=rr, column=5)
+                    new_val = _ensure_unit(cell.value, 'мл')
+                    if new_val != cell.value:
+                        cell.value = new_val
+                except Exception:
+                    pass
+
             tpl_wb.save(output_path)
-            return True, f"Скопировано {copied} ячеек в A6..F42; дата обновлена; ссылки ХЦ установлены"
+            return True, f"Скопировано {copied} ячеек в A6..F42; дата обновлена; ссылки ХЦ установлены; единицы добавлены"
         except Exception as e:
             return False, f"Ошибка при копировании A6..F42: {str(e)}"
 
