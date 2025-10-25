@@ -6,7 +6,7 @@ from datetime import datetime
 import re
 from typing import List, Dict, Optional, Tuple
 
-from app.services.dish_extractor import extract_categorized_dishes_from_menu, extract_date_from_menu
+from app.services.dish_extractor import extract_categorized_dishes_from_menu, extract_date_from_menu, extract_dishes_from_column_d7_d38
 
 class BrokerageJournalGenerator:
     """Генератор бракеражного журнала на основе меню"""
@@ -35,22 +35,32 @@ class BrokerageJournalGenerator:
         
         # Точные заголовки разделов, которые точно нужно исключить
         exact_headers = [
-            "Завтраки", "Салаты и холодные закуски", "Первые блюда", "Блюда из мяса",
-            "Блюда из птицы", "Блюда из рыбы", "Гарниры"
+            "завтраки", "салаты и холодные закуски", "первые блюда", "блюда из мяса",
+            "блюда из птицы", "блюда из рыбы", "гарниры", "сэндвичи", "сендвичи"
         ]
         
-        # Проверяем точное совпадение с заголовками
+        # Проверяем точное совпадение с заголовками (без учета регистра)
         if lower in exact_headers:
             return True
             
         # Строки полностью в верхнем регистре и очень короткие (вероятно заголовки)
-        if txt.isupper() and len(txt) <= 15 and any(h in lower for h in ['блюд', 'салат', 'сэндвич']):
+        # Важно: не отбрасываем обычные блюда типа "Салат ..." — проверяем только формы разделов
+        if txt.isupper() and len(txt) <= 40 and any(h in lower for h in [
+            'блюда', 'салаты', 'закуск', 'первые', 'вторые', 'гарниры', 'напит', 'сэндвич']):
             return True
             
         return False
     
+    def _should_exclude_by_name(self, name: str) -> bool:
+        """Фильтр блюд, которые не нужно вставлять независимо от категории."""
+        nm = str(name).strip().lower()
+        if not nm:
+            return True
+        banned_parts = ['пельмен', 'варени', 'сэндвич', 'сендвич']
+        return any(bp in nm for bp in banned_parts)
+    
     def create_brokerage_journal(self, menu_path: str, template_path: str, output_path: str) -> Tuple[bool, str]:
-        """Создает бракеражный журнал на основе меню с листа касс, заполняя столбец A завтраками, а столбец G - остальными блюдами. Время не изменяем."""
+        """Создает бракеражный журнал на основе меню. Левый столбец (A) формируется копированием A6..A* до заголовка "СЭНДВИЧИ", без строк-заголовков "ЗАВТРАКИ" и "САЛАТЫ И ХОЛОДНЫЕ ЗАКУСКИ". Правый столбец (G) — остальные категории."""
         try:
             # Проверяем существование шаблона
             if not Path(template_path).exists():
@@ -61,7 +71,7 @@ class BrokerageJournalGenerator:
             if not menu_date:
                 menu_date = datetime.now()
             
-            # Извлекаем блюда по категориям
+            # Извлекаем блюда по категориям (для правого столбца)
             categories = self.extract_categorized_dishes(menu_path)
             
             # Отладочный вывод результата
@@ -69,29 +79,53 @@ class BrokerageJournalGenerator:
             for category, dishes in categories.items():
                 print(f"{category}: {len(dishes)} блюд - {dishes}")
             
-            # Собираем завтраки и салаты для левого столбца (A)
-            left_list: List[str] = []
-            left_list.extend(categories.get('завтрак', []))
-            left_list.extend(categories.get('салат', []))
-            # Удаляем заголовки разделов
-            left_list = [d for d in left_list if not self._is_section_header(d)]
+            # Левый столбец (A): используем новую функцию для извлечения блюд из D7:D38
+            print("\nИзвлекаем блюда для левого столбца из диапазона D7:D38...")
+            # Извлекаем сырые блюда для правой колонки G прямо из D7:D38 (без 4 заголовков)
+            right_source = extract_dishes_from_column_d7_d38(menu_path)
+            
+            # Для левого столбца используем прежнюю логику фильтрации и дополнения категориями
+            filtered_left = []
+            for dish_name in right_source:
+                if not self._is_section_header(dish_name) and not self._should_exclude_by_name(dish_name):
+                    filtered_left.append(dish_name)
+            cat_left = []
+            cat_left.extend(categories.get('завтрак', []))
+            cat_left.extend(categories.get('салат', []))
+            merged: List[str] = []
+            seen = set()
+            for n in (filtered_left + cat_left):
+                if not n:
+                    continue
+                if self._is_section_header(n) or self._should_exclude_by_name(n):
+                    continue
+                key = n.strip()
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(key)
+            left_list = merged[:37]
             print(f"\nКоличество блюд для левого столбца (A): {len(left_list)}")
             
-            # Собираем остальные блюда для правого столбца (G)
-            right_list: List[str] = []
-            right_list.extend(categories.get('первое', []))
-            right_list.extend(categories.get('мясо', []))
-            right_list.extend(categories.get('курица', []))
-            right_list.extend(categories.get('птица', []))
-            right_list.extend(categories.get('рыба', []))
-            right_list.extend(categories.get('гарнир', []))
-            # Удаляем заголовки разделов
-            right_list = [d for d in right_list if not self._is_section_header(d)]
-            print(f"Количество блюд для правого столбца (G): {len(right_list)}")
-            
-            # Открываем шаблон
+            # Открываем шаблон и выбираем целевой лист
             wb = openpyxl.load_workbook(template_path)
-            ws = wb.active
+            # Ищем лист, где в первых строчках встречается "наименование блюда"; иначе active
+            ws = None
+            for ws_candidate in wb.worksheets:
+                found = False
+                for r in range(1, min(21, ws_candidate.max_row + 1)):
+                    for c in range(1, min(10, ws_candidate.max_column + 1)):
+                        v = ws_candidate.cell(row=r, column=c).value
+                        if v and ('наимен' in str(v).lower()) and ('блюд' in str(v).lower()):
+                            found = True
+                            break
+                    if found:
+                        break
+                if found:
+                    ws = ws_candidate
+                    break
+            if ws is None:
+                ws = wb.active
             
             # Обновляем дату в шаблоне (строка 3, колонка 1)
             russian_months = {
@@ -105,58 +139,47 @@ class BrokerageJournalGenerator:
             date_str = menu_date.strftime('%d.%m.%y')
             ws.title = date_str
             
-            # Находим строку заголовков таблицы ("НАИМЕНОВАНИЕ БЛЮДА" в колонке A)
+            # Пытаемся найти строку заголовков таблицы ("НАИМЕНОВАНИЕ БЛЮДА")
+            # Сканируем до 20 первых строк, по всем колонкам A..I
             header_row = None
-            for r in range(1, ws.max_row + 1):
-                v = ws.cell(row=r, column=1).value
-                if v and 'наименование' in str(v).lower() and 'блюд' in str(v).lower():
-                    header_row = r
+            for r in range(1, min(21, ws.max_row + 1)):
+                for c in range(1, 10):
+                    v = ws.cell(row=r, column=c).value
+                    if v and ('наимен' in str(v).lower()) and ('блюд' in str(v).lower()):
+                        header_row = r
+                        break
+                if header_row is not None:
                     break
             if header_row is None:
-                return False, 'Не удалось определить заголовок таблицы в шаблоне'
+                # Фолбэк: предполагаем, что данные начинаются с 6-й строки (A6)
+                header_row = 5
             
             start_row = header_row + 1  # первая строка для блюд
             
-            # Определяем первую полностью пустую строку: дальше НИЧЕГО не трогаем
-            stop_row = start_row
-            while stop_row <= ws.max_row:
-                row_empty = True
-                for c in range(1, 10):  # A..I
-                    if ws.cell(row=stop_row, column=c).value not in (None, ''):
-                        row_empty = False
-                        break
-                if row_empty:
-                    break
-                stop_row += 1
+            # Диапазон для записи берём до конца листа (чтобы писать и в пустые строки)
+            stop_row = ws.max_row + 1
             
-            # Унифицированная вставка через общий движок
-            from app.services.excel_inserter import fill_cells_sequential, TargetColumns
-            from app.services.dish_extractor import DishItem
+            # Применяем дополнительный фильтр по названиям (не вставлять пельмени/сэндвичи)
+            left_list = [n for n in left_list if not self._should_exclude_by_name(n)]
+            # Для правого столбца используем исходный список из D7:D38 без добавок (right_source)
 
-            # Преобразуем списки названий в DishItem без веса/цены
-            left_items = [DishItem(name=n) for n in left_list]
-            right_items = [DishItem(name=n) for n in right_list]
+            # Левый столбец: строго A7..A43, принудительная перезапись
+            left_start = 7
+            left_stop = 44  # exclusive, т.е. до A43 включительно
+            # Пишем напрямую в A7..A43 без посредников
+            inserted_left = 0
+            for idx, name in enumerate(left_list[:37]):
+                ws.cell(row=7 + idx, column=1, value=name)
+                inserted_left += 1
 
-            inserted_left = fill_cells_sequential(
-                ws,
-                start_row=start_row,
-                stop_row=stop_row,
-                columns=TargetColumns(name_col=1),
-                dishes=left_items,
-                replace_only_empty=True,
-            )
-
-            inserted_right = fill_cells_sequential(
-                ws,
-                start_row=start_row,
-                stop_row=stop_row,
-                columns=TargetColumns(name_col=7),  # G
-                dishes=right_items,
-                replace_only_empty=True,
-            )
+            # Правый столбец (G7..G34): жёсткая перезапись списком из D7:D38 (без 4 заголовков)
+            inserted_right = 0
+            for idx, name in enumerate(right_source[:28]):  # G7..G34 — 28 строк
+                ws.cell(row=7 + idx, column=7, value=name)
+                inserted_right += 1
 
             wb.save(output_path)
-            return True, f"Бракеражный журнал создан успешно для даты {date_str} (вставлено {inserted_left} блюд в колонку A, {inserted_right} блюд в колонку G)"
+            return True, f"Бракеражный журнал создан: {date_str} (A: {inserted_left}, G: {inserted_right})"
         except Exception as e:
             return False, f"Ошибка при создании бракеражного журнала: {str(e)}"
     

@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 from PySide6.QtCore import Qt, QMimeData, QSize
 from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QBrush, QLinearGradient, QFont
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QBoxLayout,
     QLabel, QPushButton, QFileDialog, QTextEdit, QComboBox, QLineEdit,
     QGroupBox, QCheckBox, QSpinBox, QRadioButton, QButtonGroup, QMessageBox, QFrame, QSizePolicy, QScrollArea,
 )
@@ -124,15 +124,15 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        root = QVBoxLayout(central)
-        LayoutStyles.apply_margins(root, LayoutStyles.DEFAULT_MARGINS)
-        root.setSpacing(AppStyles.DEFAULT_SPACING)
+        self.rootLayout = QVBoxLayout(central)
+        LayoutStyles.apply_margins(self.rootLayout, LayoutStyles.DEFAULT_MARGINS)
+        self.rootLayout.setSpacing(AppStyles.DEFAULT_SPACING)
 
         # Панель управления (сверху)
-        topBar = QFrame(); topBar.setObjectName("topBar")
-        layTop = QHBoxLayout(topBar)
-        LayoutStyles.apply_margins(layTop, LayoutStyles.TOPBAR_MARGINS)
-        layTop.setSpacing(AppStyles.DEFAULT_SPACING)
+        self.topBar = QFrame(); self.topBar.setObjectName("topBar")
+        self.layTop = QHBoxLayout(self.topBar)
+        LayoutStyles.apply_margins(self.layTop, LayoutStyles.TOPBAR_MARGINS)
+        self.layTop.setSpacing(AppStyles.DEFAULT_SPACING)
 
         lblTheme = QLabel("Тема:")
         self.cmbTheme = QComboBox()
@@ -149,20 +149,20 @@ class MainWindow(QMainWindow):
         self.btnShowCompare = QPushButton("Сравнить меню")
         self.btnShowCompare.clicked.connect(self.show_compare_sections)
 
-        layTop.addWidget(lblTheme)
-        layTop.addWidget(self.cmbTheme)
-        layTop.addStretch(1)
-        layTop.addWidget(self.btnShowCompare)
-        layTop.addWidget(self.btnDownloadTemplate)
-        layTop.addWidget(self.btnMakePresentation)
-        layTop.addWidget(self.btnBrokerage)
+        self.layTop.addWidget(lblTheme)
+        self.layTop.addWidget(self.cmbTheme)
+        self.layTop.addStretch(1)
+        self.layTop.addWidget(self.btnShowCompare)
+        self.layTop.addWidget(self.btnDownloadTemplate)
+        self.layTop.addWidget(self.btnMakePresentation)
+        self.layTop.addWidget(self.btnBrokerage)
 
         # Apply centralized stylesheet (already set in StyleManager.setup_main_window)
 
-        self.topGroup = nice_group("Панель управления", topBar)
+        self.topGroup = nice_group("Панель управления", self.topBar)
         self.topGroup.setObjectName("topGroup")
         LayoutStyles.apply_size_policy(self.topGroup, LayoutStyles.EXPANDING_FIXED)
-        root.addWidget(self.topGroup)
+        self.rootLayout.addWidget(self.topGroup)
 
         # Область прокрутки для остального содержимого, чтобы панель всегда была наверху
         self.scrollArea = QScrollArea()
@@ -174,7 +174,7 @@ class MainWindow(QMainWindow):
         self.contentLayout.setSpacing(AppStyles.CONTENT_SPACING)  # фиксированный вертикальный интервал между компонентами
         self.scrollArea.setWidget(self.contentContainer)
         self.scrollArea.setAlignment(Qt.AlignTop)  # прижимаем контент к верху, если он ниже области
-        root.addWidget(self.scrollArea, 1)
+        self.rootLayout.addWidget(self.scrollArea, 1)
 
         # Excel файл для презентации (используем тот же стиль, что и для файлов сравнения)
         self.edExcelPath = DropLineEdit()
@@ -198,46 +198,46 @@ class MainWindow(QMainWindow):
         
         # Панель действий внизу для сравнения (фиксированная)
         self.actionsPanel = QWidget(); self.actionsPanel.setObjectName("actionsPanel")
-        la = QHBoxLayout(self.actionsPanel)
-        LayoutStyles.apply_margins(la, LayoutStyles.MINIMAL_TOP_MARGIN)  # минимальный отступ сверху
+        self.actionsLayout = QHBoxLayout(self.actionsPanel)
+        LayoutStyles.apply_margins(self.actionsLayout, LayoutStyles.MINIMAL_TOP_MARGIN)  # минимальный отступ сверху
         self.btnCompare = QPushButton("Сравнить и подсветить")
         self.btnCompare.clicked.connect(self.do_compare)
-        la.addStretch(1)
-        la.addWidget(self.btnCompare)
-        root.addWidget(self.actionsPanel)
+        self.actionsLayout.addStretch(1)
+        self.actionsLayout.addWidget(self.btnCompare)
+        self.rootLayout.addWidget(self.actionsPanel)
         self.actionsPanel.setVisible(False)
         
         # Панель действий внизу для презентаций (фиксированная)
         self.presentationActionsPanel = QWidget(); self.presentationActionsPanel.setObjectName("actionsPanel")
-        pla = QHBoxLayout(self.presentationActionsPanel)
-        LayoutStyles.apply_margins(pla, LayoutStyles.CONTENT_TOP_MARGIN)  # небольшой отступ сверху
+        self.presentationActionsLayout = QHBoxLayout(self.presentationActionsPanel)
+        LayoutStyles.apply_margins(self.presentationActionsLayout, LayoutStyles.CONTENT_TOP_MARGIN)  # небольшой отступ сверху
         self.btnCreatePresentationWithData = QPushButton("Скачать презентацию с меню")
         self.btnCreatePresentationWithData.clicked.connect(self.do_create_presentation_with_data)
-        pla.addStretch(1)
-        pla.addWidget(self.btnCreatePresentationWithData)
-        root.addWidget(self.presentationActionsPanel)
+        self.presentationActionsLayout.addStretch(1)
+        self.presentationActionsLayout.addWidget(self.btnCreatePresentationWithData)
+        self.rootLayout.addWidget(self.presentationActionsPanel)
         self.presentationActionsPanel.setVisible(False)
         
         # Панель действий внизу для бракеражного журнала (фиксированная)
         self.brokerageActionsPanel = QWidget(); self.brokerageActionsPanel.setObjectName("actionsPanel")
-        bla = QHBoxLayout(self.brokerageActionsPanel)
-        LayoutStyles.apply_margins(bla, LayoutStyles.CONTENT_TOP_MARGIN)  # небольшой отступ сверху
+        self.brokerageActionsLayout = QHBoxLayout(self.brokerageActionsPanel)
+        LayoutStyles.apply_margins(self.brokerageActionsLayout, LayoutStyles.CONTENT_TOP_MARGIN)  # небольшой отступ сверху
         self.btnCreateBrokerageJournal = QPushButton("Скачать бракеражный журнал")
         self.btnCreateBrokerageJournal.clicked.connect(self.do_create_brokerage_journal_with_data)
-        bla.addStretch(1)
-        bla.addWidget(self.btnCreateBrokerageJournal)
-        root.addWidget(self.brokerageActionsPanel)
+        self.brokerageActionsLayout.addStretch(1)
+        self.brokerageActionsLayout.addWidget(self.btnCreateBrokerageJournal)
+        self.rootLayout.addWidget(self.brokerageActionsPanel)
         self.brokerageActionsPanel.setVisible(False)
         
         # Панель действий внизу для шаблона меню (фиксированная)
         self.templateActionsPanel = QWidget(); self.templateActionsPanel.setObjectName("actionsPanel")
-        tla = QHBoxLayout(self.templateActionsPanel)
-        LayoutStyles.apply_margins(tla, LayoutStyles.CONTENT_TOP_MARGIN)  # небольшой отступ сверху
+        self.templateActionsLayout = QHBoxLayout(self.templateActionsPanel)
+        LayoutStyles.apply_margins(self.templateActionsLayout, LayoutStyles.CONTENT_TOP_MARGIN)  # небольшой отступ сверху
         self.btnFillTemplate = QPushButton("Заполнить и скачать шаблон меню")
         self.btnFillTemplate.clicked.connect(self.do_fill_template_with_data)
-        tla.addStretch(1)
-        tla.addWidget(self.btnFillTemplate)
-        root.addWidget(self.templateActionsPanel)
+        self.templateActionsLayout.addStretch(1)
+        self.templateActionsLayout.addWidget(self.btnFillTemplate)
+        self.rootLayout.addWidget(self.templateActionsPanel)
         self.templateActionsPanel.setVisible(False)
 
         # File 1
@@ -324,6 +324,12 @@ class MainWindow(QMainWindow):
             interval_ms=1000  # Проверка каждую секунду
         )
 
+        # Применяем компактный режим при узкой ширине окна (мобильный превью)
+        try:
+            self._apply_compact_mode(self.width() <= 480)
+        except Exception:
+            pass
+
     def log(self, msg: str):
         # Лог отключён по запросу — ничего не делаем
         pass
@@ -356,6 +362,33 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         super().closeEvent(event)
+
+    def _apply_compact_mode(self, compact: bool) -> None:
+        if getattr(self, "_compact", None) == compact:
+            return
+        self._compact = compact
+        try:
+            # Корневой layout
+            if hasattr(self, "rootLayout"):
+                LayoutStyles.apply_margins(self.rootLayout, (8, 8, 8, 8) if compact else LayoutStyles.DEFAULT_MARGINS)
+                self.rootLayout.setSpacing(AppStyles.COMPACT_SPACING if compact else AppStyles.DEFAULT_SPACING)
+            # Верхняя панель: горизонтально на десктопе, вертикально в компактном режиме
+            if hasattr(self, "layTop"):
+                self.layTop.setDirection(QBoxLayout.TopToBottom if compact else QBoxLayout.LeftToRight)
+                LayoutStyles.apply_margins(self.layTop, (8, 8, 8, 8) if compact else LayoutStyles.TOPBAR_MARGINS)
+                self.layTop.setSpacing(AppStyles.COMPACT_SPACING if compact else AppStyles.DEFAULT_SPACING)
+            # Контентные отступы
+            if hasattr(self, "contentLayout"):
+                self.contentLayout.setSpacing(AppStyles.COMPACT_SPACING if compact else AppStyles.CONTENT_SPACING)
+        except Exception:
+            pass
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        try:
+            self._apply_compact_mode(self.width() <= 480)
+        except Exception:
+            pass
 
     def browse_file(self, target: QLineEdit, which: int):
         path, _ = QFileDialog.getOpenFileName(self, "Выберите файл", str(Path.cwd()), "Excel (*.xls *.xlsx *.xlsm);;Все файлы (*.*)")

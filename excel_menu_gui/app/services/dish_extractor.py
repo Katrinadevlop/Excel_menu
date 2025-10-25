@@ -2000,3 +2000,67 @@ def extract_fish_dishes_from_column_e(excel_path: str) -> List[DishItem]:
     except Exception as e:
         print(f"Ошибка при извлечении рыбных блюд из столбца E: {e}")
         return []
+
+
+def extract_dishes_from_column_d7_d38(excel_path: str) -> List[str]:
+    """
+    Извлекает названия блюд строго из диапазона D7:D38 файла меню пользователя.
+    Исключаются только четыре ячейки-заголовка по позициям: D11, D18, D25, D30.
+    Всё остальное из D7..D38 вставляется как есть (кроме пустых).
+    
+    Args:
+        excel_path (str): Путь к Excel-файлу меню.
+    
+    Returns:
+        List[str]: Ровно 28 позиций (если все непустые): D7..D38 без D11/D18/D25/D30.
+    """
+    try:
+        # Определяем лист (приоритет на 'касс')
+        wb = openpyxl.load_workbook(excel_path, data_only=True)
+        ws = None
+        for sheet in wb.worksheets:
+            if 'касс' in sheet.title.lower():
+                ws = sheet
+                break
+        if ws is None:
+            ws = wb.worksheets[0]
+        
+        dishes: List[str] = []
+        skip_rows = {11, 18, 25, 30}
+        
+        # Извлекаем данные из D7:D38 (колонка 4, строки 7-38)
+        for row_num in range(7, 39):  # 7-38 включительно
+            if row_num in skip_rows:
+                continue
+            cell = ws.cell(row=row_num, column=4)  # Колонка D
+            
+            # Обрабатываем объединенные ячейки
+            value = cell.value
+            if value is None and hasattr(cell, '__class__') and cell.__class__.__name__ == 'MergedCell':
+                try:
+                    # Ищем мастер-ячейку для объединенной ячейки
+                    for merged_range in ws.merged_cells.ranges:
+                        if (merged_range.min_row <= row_num <= merged_range.max_row and 
+                            merged_range.min_col <= 4 <= merged_range.max_col):
+                            master_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                            value = master_cell.value
+                            break
+                except Exception:
+                    continue
+            
+            if value is None:
+                continue
+                
+            dish_name = str(value).strip()
+            if not dish_name:
+                continue
+            
+            dishes.append(dish_name)
+            print(f"Извлечено из D{row_num}: {dish_name}")
+        
+        print(f"Всего извлечено блюд из диапазона D7:D38 (без 11,18,25,30): {len(dishes)}")
+        return dishes
+        
+    except Exception as e:
+        print(f"Ошибка при извлечении блюд из D7:D38: {e}")
+        return []
