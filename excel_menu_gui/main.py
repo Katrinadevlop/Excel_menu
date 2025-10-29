@@ -620,7 +620,7 @@ class MainWindow(QMainWindow):
                 return
             
             # Выбираем место сохранения презентации
-            suggested_name = "меню - копия.pptx"
+            suggested_name = "menu — копия.pptx"
             desktop = Path.home() / "Desktop"
             suggested_path = str(desktop / suggested_name)
             
