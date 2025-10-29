@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import re
+import tempfile
+import xlrd
 
 from app.services.dish_extractor import (
     extract_categorized_dishes_from_menu,
@@ -20,6 +22,41 @@ from app.services.dish_extractor import (
     DishItem,
 )
 from app.services.comparator import _find_category_ranges, _extract_dishes_from_multiple_columns, read_cell_values, normalize_dish
+
+
+def convert_xls_to_xlsx(xls_path: str) -> str:
+    """Конвертирует старый формат .xls в .xlsx и возвращает путь к временному файлу"""
+    try:
+        # Читаем .xls файл с помощью xlrd
+        xls_book = xlrd.open_workbook(xls_path, formatting_info=False)
+        
+        # Создаем временный .xlsx файл
+        temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.xlsx', delete=False)
+        temp_path = temp_file.name
+        temp_file.close()
+        
+        # Создаем новый .xlsx workbook
+        xlsx_book = openpyxl.Workbook()
+        xlsx_book.remove(xlsx_book.active)  # Удаляем стандартный лист
+        
+        # Копируем каждый лист
+        for sheet_idx in range(xls_book.nsheets):
+            xls_sheet = xls_book.sheet_by_index(sheet_idx)
+            xlsx_sheet = xlsx_book.create_sheet(title=xls_sheet.name)
+            
+            # Копируем все ячейки
+            for row_idx in range(xls_sheet.nrows):
+                for col_idx in range(xls_sheet.ncols):
+                    cell_value = xls_sheet.cell_value(row_idx, col_idx)
+                    # xlrd использует 0-based индексы, openpyxl - 1-based
+                    xlsx_sheet.cell(row=row_idx + 1, column=col_idx + 1, value=cell_value)
+        
+        # Сохраняем временный файл
+        xlsx_book.save(temp_path)
+        return temp_path
+        
+    except Exception as e:
+        raise Exception(f"Ошибка конвертации .xls в .xlsx: {str(e)}")
 
 
 class MenuTemplateFiller:
@@ -1442,8 +1479,8 @@ class MenuTemplateFiller:
 
     def sort_kassa_ranges(self, ws) -> None:
         """Сортирует все категории в фиксированных диапазонах на листе «Касса»:
-        - Завтраки: A7..A29
-        - Салаты: A31..A42
+        - Завтраки: A7..A27
+        - Салаты: A29..A41 (A28 - заголовок)
         - Супы: D7..D10
         - Мясо: D12..D17
         - Птица: D19..D24
@@ -1451,8 +1488,8 @@ class MenuTemplateFiller:
         - Гарниры: D31..D38
         """
         # Левая колонка (имя/вес/цена в A/B/C)
-        self._sort_block(ws, start_row=7, end_row=29, name_col=1, weight_col=2, price_col=3)
-        self._sort_block(ws, start_row=31, end_row=42, name_col=1, weight_col=2, price_col=3)
+        self._sort_block(ws, start_row=7, end_row=27, name_col=1, weight_col=2, price_col=3)  # Завтраки
+        self._sort_block(ws, start_row=29, end_row=41, name_col=1, weight_col=2, price_col=3)  # Салаты
         # Правая колонка (имя/вес/цена в D/E/F)
         self._sort_block(ws, start_row=7, end_row=10, name_col=4, weight_col=5, price_col=6)
         self._sort_block(ws, start_row=12, end_row=17, name_col=4, weight_col=5, price_col=6)
@@ -1466,14 +1503,26 @@ class MenuTemplateFiller:
         только на листах «Касса/Касс». Оформление и объединения не меняем.
         """
         import openpyxl
+        import os
 
+        temp_file_path = None
         try:
             if not Path(template_path).exists():
                 return False, f"Шаблон не найден: {template_path}"
             if not Path(source_menu_path).exists():
                 return False, f"Источник не найден: {source_menu_path}"
 
-            src_wb = openpyxl.load_workbook(source_menu_path, data_only=True)
+            # Проверяем формат исходного файла
+            source_path_to_use = source_menu_path
+            if source_menu_path.lower().endswith('.xls'):
+                # Конвертируем .xls в .xlsx
+                try:
+                    temp_file_path = convert_xls_to_xlsx(source_menu_path)
+                    source_path_to_use = temp_file_path
+                except Exception as conv_err:
+                    return False, f"Не удалось конвертировать .xls файл: {str(conv_err)}"
+
+            src_wb = openpyxl.load_workbook(source_path_to_use, data_only=True)
             tpl_wb = openpyxl.load_workbook(template_path)
 
             def find_kassa(ws_list):
@@ -1508,6 +1557,41 @@ class MenuTemplateFiller:
                     except AttributeError:
                         # если целевая ячейка — не мастер объединения, просто пропускаем
                         pass
+            
+            # Очистка заголовков из данных в колонке A (завтраки и салаты)
+            # Убираем строки с заголовками типа "САЛАТЫ", "ЗАВТРАКИ" из блока данных
+            def _is_category_header(val) -> bool:
+                if not val:
+                    return False
+                s = str(val).upper().strip()
+                # Проверяем, является ли это заголовком категории
+                header_keywords = ['САЛАТ', 'ЗАВТРАК', 'ХОЛОДН', 'ЗАКУСК', 'БЛЮДА', 'ПЕРВЫЕ', 'ГАРНИР']
+                # Заголовок обычно содержит ключевое слово и мало чего ещё (короткий или только заголовок)
+                word_count = len(s.split())
+                has_keyword = any(kw in s for kw in header_keywords)
+                # Если в строке только заголовочные слова и нет чисел/весов
+                has_numbers = any(char.isdigit() for char in s)
+                return has_keyword and not has_numbers and word_count <= 5
+            
+            # Проходим по левой колонке (A7-A42) и удаляем заголовки
+            for rr in range(7, 43):
+                val_a = tpl_ws.cell(row=rr, column=1).value
+                if _is_category_header(val_a):
+                    # Это заголовок - очищаем всю строку A/B/C
+                    try:
+                        tpl_ws.cell(row=rr, column=1).value = None
+                        tpl_ws.cell(row=rr, column=2).value = None
+                        tpl_ws.cell(row=rr, column=3).value = None
+                    except AttributeError:
+                        pass
+            
+            # Устанавливаем заголовок "САЛАТЫ И ХОЛОДНЫЕ ЗАКУСКИ" строго на A28
+            try:
+                tpl_ws.cell(row=28, column=1).value = "САЛАТЫ и ХОЛОДНЫЕ ЗАКУСКИ"
+                tpl_ws.cell(row=28, column=2).value = None
+                tpl_ws.cell(row=28, column=3).value = None
+            except AttributeError:
+                pass
 
             # Нормализация правой части: имена блюд должны быть в колонке D, вес — в E, цена — в F
             import re as _re
@@ -1733,6 +1817,13 @@ class MenuTemplateFiller:
             return True, f"Скопировано {copied} ячеек в A6..F42; дата обновлена; ссылки ХЦ установлены; единицы добавлены; категории отсортированы"
         except Exception as e:
             return False, f"Ошибка при копировании A6..F42: {str(e)}"
+        finally:
+            # Удаляем временный файл, если он был создан
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                except Exception:
+                    pass
 
     def fill_kassa_with_counts(
         self,
@@ -1765,9 +1856,22 @@ class MenuTemplateFiller:
             }
         
         # 1) Извлекаем блюда детально (как в фиксированных диапазонах)
+        temp_file_path = None
         try:
             import openpyxl as _ox
-            src_wb = _ox.load_workbook(source_menu_path, data_only=True)
+            import os
+            
+            # Проверяем формат исходного файла
+            source_path_to_use = source_menu_path
+            if source_menu_path.lower().endswith('.xls'):
+                # Конвертируем .xls в .xlsx
+                try:
+                    temp_file_path = convert_xls_to_xlsx(source_menu_path)
+                    source_path_to_use = temp_file_path
+                except Exception as conv_err:
+                    return False, f"Не удалось конвертировать .xls файл: {str(conv_err)}"
+            
+            src_wb = _ox.load_workbook(source_path_to_use, data_only=True)
 
             def _find_sheet(wb, keywords: List[str]):
                 for sh in wb.worksheets:
@@ -1859,6 +1963,13 @@ class MenuTemplateFiller:
             ) or []
         except Exception as e:
             return False, f"Ошибка извлечения блюд: {e}"
+        finally:
+            # Удаляем временный файл, если он был создан
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                except Exception:
+                    pass
 
         # Ограничиваем по количеству
         def take(lst: List[DishItem], n: int) -> List[DishItem]:
