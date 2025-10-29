@@ -148,34 +148,51 @@ class MenuTemplateFiller:
             
             # Ищем категории и извлекаем блюда с деталями
             current_category = None
-            category_mapping = {
-                'завтрак': 'завтрак',
-                'салат': 'салат',
-                'закуск': 'салат',
-                'холодн': 'салат',
-                'перв': 'первое',
-                'мяс': 'мясо',
-                'птиц': 'птица',
-                'курин': 'птица', 
-                'рыб': 'рыба',
-                'гарнир': 'гарнир'
-            }
             
             for row in range(1, min(100, ws.max_row + 1)):
                 # Проверяем заголовки категорий
                 cell_val = ws.cell(row=row, column=1).value
                 if cell_val:
                     cell_text = str(cell_val).lower().strip()
-                    for key, category in category_mapping.items():
-                        if key in cell_text:
-                            current_category = category
-                            print(f"Найдена категория {current_category} в строке {row}: {cell_val}")
-                            break
+                    
+                    # Проверяем заголовки категорий с учётом приоритета и контекста
+                    # Важно: завтрак должен быть в начале (до строки 15), салаты - после (строки 20+)
+                    if 'завтрак' in cell_text and 'салат' not in cell_text and row < 15:
+                        current_category = 'завтрак'
+                        print(f"Найдена категория завтрак в строке {row}: {cell_val}")
+                        continue
+                    elif ('салат' in cell_text or 'закуск' in cell_text or 'холодн' in cell_text) and row >= 20:
+                        # Это заголовок салатов (после завтраков)
+                        if 'салат' in cell_text or ('холодн' in cell_text and 'закуск' in cell_text):
+                            current_category = 'салат'
+                            print(f"Найдена категория салат в строке {row}: {cell_val}")
+                            continue
+                    elif 'перв' in cell_text:
+                        current_category = 'первое'
+                        print(f"Найдена категория первое в строке {row}: {cell_val}")
+                        continue
+                    elif 'мяс' in cell_text:
+                        current_category = 'мясо'
+                        print(f"Найдена категория мясо в строке {row}: {cell_val}")
+                        continue
+                    elif 'птиц' in cell_text or 'курин' in cell_text:
+                        current_category = 'птица'
+                        print(f"Найдена категория птица в строке {row}: {cell_val}")
+                        continue
+                    elif 'рыб' in cell_text:
+                        current_category = 'рыба'
+                        print(f"Найдена категория рыба в строке {row}: {cell_val}")
+                        continue
+                    elif 'гарнир' in cell_text:
+                        current_category = 'гарнир'
+                        print(f"Найдена категория гарнир в строке {row}: {cell_val}")
+                        continue
                 
                 # Если нашли категорию, собираем блюда
                 if current_category and cell_val and current_category in result:
+                    cell_text = str(cell_val).lower().strip()
                     # Проверяем, не является ли это заголовком
-                    if not any(header in cell_text for header in ['блюда', 'салаты', 'гарниры', 'первые', 'вес', 'цена', 'руб']):
+                    if not any(header in cell_text for header in ['блюда', 'салаты', 'гарниры', 'первые', 'вес', 'цена', 'руб', 'завтрак']):
                         # Получаем вес и цену из соседних колонок
                         weight = ws.cell(row=row, column=2).value
                         price = ws.cell(row=row, column=3).value
@@ -249,10 +266,30 @@ class MenuTemplateFiller:
                         print(f"Найден заголовок гарниров в строке {row}: {cell_val}")
                         return row + 1  # Начинаем с следующей строки после заголовка
         
+        # Специальная логика для завтраков - ищем только "ЗАВТРАК" в начале файла (до строки 10)
+        if category == 'завтрак':
+            for row in range(1, min(15, ws.max_row + 1)):
+                cell_val = ws.cell(row=row, column=col).value
+                if cell_val:
+                    cell_text = str(cell_val).lower().strip()
+                    # Ищем именно заголовок "ЗАВТРАК", но не "САЛАТЫ"
+                    if 'завтрак' in cell_text and 'салат' not in cell_text:
+                        print(f"Найден заголовок завтрака в строке {row}: {cell_val}")
+                        return row + 1
+        
+        # Специальная логика для салатов - ищем "САЛАТЫ" после строки 20 (после завтраков)
+        if category == 'салат':
+            for row in range(20, min(50, ws.max_row + 1)):
+                cell_val = ws.cell(row=row, column=col).value
+                if cell_val:
+                    cell_text = str(cell_val).lower().strip()
+                    # Ищем именно заголовок "САЛАТЫ" с "ХОЛОДН" или "ЗАКУСК"
+                    if 'салат' in cell_text and ('холодн' in cell_text or 'закуск' in cell_text):
+                        print(f"Найден заголовок салатов в строке {row}: {cell_val}")
+                        return row + 1
+        
         # Для остальных категорий - находим строку с соответствующим заголовком
         header_keywords = {
-            'завтрак': ['завтрак'],
-            'салат': ['салат', 'закуск'],
             'первое': ['первые'],
             'мясо': ['мяса', 'мясо'],
             'курица': ['курица', 'птица'],
@@ -368,6 +405,16 @@ class MenuTemplateFiller:
                 cell_val = ws.cell(row=row, column=col).value
                 if cell_val and 'напит' in str(cell_val).lower():
                     return row - 1  # Возвращаем последнюю строку перед "Напитки"
+        
+        # Особая логика для салатов - ищем до "ПЕРВЫЕ БЛЮДА" или других заголовков
+        if category == 'салат':
+            for row in range(start_row, min(200, ws.max_row + 1)):
+                cell_val = ws.cell(row=row, column=col).value
+                if cell_val:
+                    cell_text = str(cell_val).lower().strip()
+                    # Останавливаемся перед следующими категориями
+                    if any(header in cell_text for header in ['первые', 'напит', 'хлеб', 'блюда из']):
+                        return row - 1
         
         # Для остальных категорий ищем до следующего заголовка
         for row in range(start_row, min(200, ws.max_row + 1)):
