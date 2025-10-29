@@ -1480,7 +1480,7 @@ class MenuTemplateFiller:
     def sort_kassa_ranges(self, ws) -> None:
         """Сортирует все категории в фиксированных диапазонах на листе «Касса»:
         - Завтраки: A7..A27
-        - Салаты: A29..A41 (A28 - заголовок)
+        - Салаты: A29..A41 (A28 - заголовок, A42 - заголовок СЭНДВИЧИ)
         - Супы: D7..D10
         - Мясо: D12..D17
         - Птица: D19..D24
@@ -1546,11 +1546,27 @@ class MenuTemplateFiller:
                     except AttributeError:
                         pass  # пропускаем MergedCell
 
-            # Копирование значений из источника
+            # Проверяем, где находится заголовок ЗАВТРАК в источнике
+            breakfast_row_in_source = None
+            for r in range(1, 15):  # Ищем в первых 15 строках
+                v = src_ws.cell(row=r, column=1).value
+                if v and 'ЗАВТРАК' in str(v).upper():
+                    breakfast_row_in_source = r
+                    break
+            
+            # Вычисляем сдвиг (если ЗАВТРАК не в A6, нужно сдвинуть)
+            shift = 0
+            if breakfast_row_in_source and breakfast_row_in_source != 6:
+                shift = breakfast_row_in_source - 6
+                print(f"Обнаружен сдвиг: заголовок ЗАВТРАК в строке {breakfast_row_in_source}, сдвигаем на {shift} строк")
+            
+            # Копирование значений из источника со сдвигом
             copied = 0
             for r in range(r1, r2 + 1):
                 for c in range(c1, c2 + 1):
-                    v = src_ws.cell(row=r, column=c).value
+                    # Читаем из источника с учетом сдвига
+                    source_row = r + shift
+                    v = src_ws.cell(row=source_row, column=c).value
                     try:
                         tpl_ws.cell(row=r, column=c).value = v
                         copied += 1
@@ -1558,38 +1574,102 @@ class MenuTemplateFiller:
                         # если целевая ячейка — не мастер объединения, просто пропускаем
                         pass
             
-            # Очистка заголовков из данных в колонке A (завтраки и салаты)
-            # Убираем строки с заголовками типа "САЛАТЫ", "ЗАВТРАКИ" из блока данных
+            # Собираем данные из колонки A по структуре меню (по заголовкам секций)
             def _is_category_header(val) -> bool:
                 if not val:
                     return False
                 s = str(val).upper().strip()
-                # Проверяем, является ли это заголовком категории
-                header_keywords = ['САЛАТ', 'ЗАВТРАК', 'ХОЛОДН', 'ЗАКУСК', 'БЛЮДА', 'ПЕРВЫЕ', 'ГАРНИР']
-                # Заголовок обычно содержит ключевое слово и мало чего ещё (короткий или только заголовок)
+                header_keywords = ['САЛАТ', 'ЗАВТРАК', 'ХОЛОДН', 'ЗАКУСК', 'БЛЮДА', 'ПЕРВЫЕ', 'ГАРНИР', 'СЭНДВИЧ']
                 word_count = len(s.split())
                 has_keyword = any(kw in s for kw in header_keywords)
-                # Если в строке только заголовочные слова и нет чисел/весов
                 has_numbers = any(char.isdigit() for char in s)
                 return has_keyword and not has_numbers and word_count <= 5
             
-            # Проходим по левой колонке (A7-A42) и удаляем заголовки
-            for rr in range(7, 43):
-                val_a = tpl_ws.cell(row=rr, column=1).value
-                if _is_category_header(val_a):
-                    # Это заголовок - очищаем всю строку A/B/C
-                    try:
-                        tpl_ws.cell(row=rr, column=1).value = None
-                        tpl_ws.cell(row=rr, column=2).value = None
-                        tpl_ws.cell(row=rr, column=3).value = None
-                    except AttributeError:
-                        pass
+            # Ищем заголовки и разделяем блюда по секциям
+            breakfast_header_row = None
+            salad_header_row = None
             
-            # Устанавливаем заголовок "САЛАТЫ И ХОЛОДНЫЕ ЗАКУСКИ" строго на A28
+            # Сначала находим строки с заголовками
+            for rr in range(6, 43):
+                name = tpl_ws.cell(row=rr, column=1).value
+                if name and _is_category_header(name):
+                    s = str(name).upper().strip()
+                    if 'ЗАВТРАК' in s and not breakfast_header_row:
+                        breakfast_header_row = rr
+                    elif ('САЛАТ' in s or 'ХОЛОДН' in s) and not salad_header_row:
+                        salad_header_row = rr
+            
+            # Собираем завтраки (от заголовка ЗАВТРАК до заголовка САЛАТЫ)
+            breakfasts = []
+            if breakfast_header_row:
+                start_row = breakfast_header_row + 1
+                end_row = salad_header_row if salad_header_row else 28
+                for rr in range(start_row, end_row):
+                    name = tpl_ws.cell(row=rr, column=1).value
+                    weight = tpl_ws.cell(row=rr, column=2).value
+                    price = tpl_ws.cell(row=rr, column=3).value
+                    if name and not _is_category_header(name):
+                        breakfasts.append((name, weight, price))
+            
+            # Собираем салаты (от заголовка САЛАТЫ до конца или до следующего заголовка)
+            salads = []
+            if salad_header_row:
+                start_row = salad_header_row + 1
+                # Ищем конец секции салатов (следующий заголовок или строка 42)
+                end_row = 42
+                for rr in range(start_row, 43):
+                    name = tpl_ws.cell(row=rr, column=1).value
+                    if name and _is_category_header(name):
+                        # Нашли следующий заголовок (например, СЭНДВИЧИ)
+                        end_row = rr
+                        break
+                
+                for rr in range(start_row, end_row):
+                    name = tpl_ws.cell(row=rr, column=1).value
+                    weight = tpl_ws.cell(row=rr, column=2).value
+                    price = tpl_ws.cell(row=rr, column=3).value
+                    if name and not _is_category_header(name):
+                        salads.append((name, weight, price))
+            
+            # Очищаем весь диапазон A7-A41
+            for rr in range(7, 42):
+                try:
+                    tpl_ws.cell(row=rr, column=1).value = None
+                    tpl_ws.cell(row=rr, column=2).value = None
+                    tpl_ws.cell(row=rr, column=3).value = None
+                except AttributeError:
+                    pass
+            
+            # Вставляем завтраки A7-A27 (максимум 21 позиция)
+            for i, (name, weight, price) in enumerate(breakfasts[:21]):
+                row = 7 + i
+                try:
+                    tpl_ws.cell(row=row, column=1).value = name
+                    tpl_ws.cell(row=row, column=2).value = weight
+                    tpl_ws.cell(row=row, column=3).value = price
+                except AttributeError:
+                    pass
+            
+            # Вставляем салаты A29-A41 (максимум 13 позиций)
+            for i, (name, weight, price) in enumerate(salads[:13]):
+                row = 29 + i
+                try:
+                    tpl_ws.cell(row=row, column=1).value = name
+                    tpl_ws.cell(row=row, column=2).value = weight
+                    tpl_ws.cell(row=row, column=3).value = price
+                except AttributeError:
+                    pass
+            
+            # Устанавливаем заголовки строго на своих местах
             try:
+                # A28 - заголовок салатов
                 tpl_ws.cell(row=28, column=1).value = "САЛАТЫ и ХОЛОДНЫЕ ЗАКУСКИ"
                 tpl_ws.cell(row=28, column=2).value = None
                 tpl_ws.cell(row=28, column=3).value = None
+                # A42 - заголовок сэндвичей
+                tpl_ws.cell(row=42, column=1).value = "СЭНДВИЧИ"
+                tpl_ws.cell(row=42, column=2).value = None
+                tpl_ws.cell(row=42, column=3).value = None
             except AttributeError:
                 pass
 
