@@ -1480,7 +1480,7 @@ class MenuTemplateFiller:
     def sort_kassa_ranges(self, ws) -> None:
         """Сортирует все категории в фиксированных диапазонах на листе «Касса»:
         - Завтраки: A7..A27
-        - Салаты: A28..A41 (A42 - заголовок СЭНДВИЧИ)
+        - Салаты: A29..A41 (A28 - заголовок, A42 - заголовок СЭНДВИЧИ)
         - Супы: D7..D10
         - Мясо: D12..D17
         - Птица: D19..D24
@@ -1489,7 +1489,7 @@ class MenuTemplateFiller:
         """
         # Левая колонка (имя/вес/цена в A/B/C)
         self._sort_block(ws, start_row=7, end_row=27, name_col=1, weight_col=2, price_col=3)  # Завтраки
-        self._sort_block(ws, start_row=28, end_row=41, name_col=1, weight_col=2, price_col=3)  # Салаты
+        self._sort_block(ws, start_row=29, end_row=41, name_col=1, weight_col=2, price_col=3)  # Салаты
         # Правая колонка (имя/вес/цена в D/E/F)
         self._sort_block(ws, start_row=7, end_row=10, name_col=4, weight_col=5, price_col=6)
         self._sort_block(ws, start_row=12, end_row=17, name_col=4, weight_col=5, price_col=6)
@@ -1792,6 +1792,19 @@ class MenuTemplateFiller:
                 except Exception:
                     pass
 
+            # Устанавливаем заголовки в фиксированные ячейки
+            try:
+                # A28 - заголовок салатов
+                tpl_ws.cell(row=28, column=1).value = "САЛАТЫ и ХОЛОДНЫЕ ЗАКУСКИ"
+                tpl_ws.cell(row=28, column=2).value = None
+                tpl_ws.cell(row=28, column=3).value = None
+                # A42 - заголовок сэндвичей
+                tpl_ws.cell(row=42, column=1).value = "СЭНДВИЧИ"
+                tpl_ws.cell(row=42, column=2).value = None
+                tpl_ws.cell(row=42, column=3).value = None
+            except Exception:
+                pass
+            
             # Сортировка категорий в указанных диапазонах
             try:
                 self.sort_kassa_ranges(tpl_ws)
