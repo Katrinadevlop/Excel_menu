@@ -63,6 +63,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # Можно добавить путь к .ico файлу если есть
+    icon='icon.ico',  # Красивая иконка приложения
     version=None,
 )

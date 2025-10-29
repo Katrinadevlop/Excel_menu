@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <!-- Фон -->
+  <rect width="256" height="256" rx="32" fill="#2E8B57"/>
+  
+  <!-- Основная форма документа -->
+  <rect x="48" y="32" width="144" height="192" rx="8" fill="#ffffff" stroke="#1F5F3F" stroke-width="2"/>
+  
+  <!-- Заголовок документа -->
+  <rect x="56" y="48" width="128" height="24" rx="4" fill="#4CAF50"/>
+  
+  <!-- Строки таблицы -->
+  <rect x="56" y="88" width="128" height="12" rx="2" fill="#E8F5E8"/>
+  <rect x="56" y="108" width="128" height="12" rx="2" fill="#F0F8F0"/>
+  <rect x="56" y="128" width="128" height="12" rx="2" fill="#E8F5E8"/>
+  <rect x="56" y="148" width="128" height="12" rx="2" fill="#F0F8F0"/>
+  <rect x="56" y="168" width="128" height="12" rx="2" fill="#E8F5E8"/>
+  
+  <!-- Вертикальные разделители -->
+  <line x1="88" y1="88" x2="88" y2="180" stroke="#C8E6C9" stroke-width="1"/>
+  <line x1="120" y1="88" x2="120" y2="180" stroke="#C8E6C9" stroke-width="1"/>
+  <line x1="152" y1="88" x2="152" y2="180" stroke="#C8E6C9" stroke-width="1"/>
+  
+  <!-- Значок меню в углу -->
+  <circle cx="200" cy="80" r="24" fill="#FF6B35"/>
+  <rect x="192" y="74" width="16" height="2" fill="white"/>
+  <rect x="192" y="79" width="16" height="2" fill="white"/>
+  <rect x="192" y="84" width="16" height="2" fill="white"/>
+  
+  <!-- Декоративные элементы -->
+  <circle cx="72" cy="200" r="8" fill="#4CAF50" opacity="0.7"/>
+  <circle cx="168" cy="200" r="6" fill="#66BB6A" opacity="0.7"/>
+</svg>
