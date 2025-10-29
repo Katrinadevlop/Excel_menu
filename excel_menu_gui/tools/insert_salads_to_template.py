@@ -26,7 +26,7 @@ def find_kassa_sheet(wb):
 
 def insert_salads_to_template(template_path: str, menu_path: str, output_path: str):
     """
-    Извлекает салаты из меню и вставляет их в шаблон в строки A29-A41.
+    Извлекает салаты из меню и вставляет их в шаблон в строки A28-A41.
     
     Args:
         template_path: Путь к шаблону
@@ -65,22 +65,22 @@ def insert_salads_to_template(template_path: str, menu_path: str, output_path: s
         wb = openpyxl.load_workbook(template_path)
         ws = find_kassa_sheet(wb)
         
-        # Очищаем диапазон A29-A41, B29-B41, C29-C41
-        print(f"🧹 Очищаем диапазон A29:C41 в листе '{ws.title}'")
-        for row in range(29, 42):
+        # Очищаем диапазон A28-A41, B28-B41, C28-C41
+        print(f"🧹 Очищаем диапазон A28:C41 в листе '{ws.title}'")
+        for row in range(28, 42):
             for col in range(1, 4):  # A, B, C
                 try:
                     ws.cell(row=row, column=col).value = None
                 except AttributeError:
                     pass  # Пропускаем объединенные ячейки
         
-        # Вставляем салаты в A29-A41 (максимум 13 позиций)
-        print(f"📋 Вставляем салаты в диапазон A29:C41")
+        # Вставляем салаты в A28-A41 (максимум 14 позиций)
+        print(f"📋 Вставляем салаты в диапазон A28:C41")
         inserted_count = 0
-        max_salads = 13  # Строки с 29 по 41 (включительно)
+        max_salads = 14  # Строки с 28 по 41 (включительно)
         
         for i, salad in enumerate(salads[:max_salads]):
-            row = 29 + i
+            row = 28 + i
             try:
                 # Вставляем название
                 ws.cell(row=row, column=1).value = salad.name
@@ -99,7 +99,7 @@ def insert_salads_to_template(template_path: str, menu_path: str, output_path: s
         wb.save(output_path)
         wb.close()
         
-        print(f"\n✅ Готово! Вставлено {inserted_count} салатов в строки A29-A41")
+        print(f"\n✅ Готово! Вставлено {inserted_count} салатов в строки A28-A41")
         return True
         
     except Exception as e:
