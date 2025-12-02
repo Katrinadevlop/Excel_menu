@@ -62,6 +62,18 @@ def main():
         /* минимальные зазоры вокруг загрузчика файлов и кнопок */
         .stFileUploader {margin-top: 1px; margin-bottom: 1px;}
         .stButton {margin-top: 1px;}
+        /* Локализация текста кнопки загрузчика файлов: "Browse files" -> "Выбрать файл" */
+        [data-testid="stFileUploadDropzone"] button {position: relative;}
+        [data-testid="stFileUploadDropzone"] button div:first-child {visibility: hidden;}
+        [data-testid="stFileUploadDropzone"] button::after {
+            content: "Выбрать файл";
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            text-align: center;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -186,45 +198,49 @@ def create_presentation_page():
         key="excel_presentation"
     )
     
-    if st.button("Создать презентацию", type="primary", disabled=not excel_file):
-        if excel_file:
-            with st.spinner("Создание презентации..."):
-                try:
-                    # Сохраняем файл
-                    excel_path = save_uploaded_file(excel_file)
-                    
-                    # Ищем шаблон презентации
-                    template_path = find_template("presentation_template.pptx")
-                    if not template_path:
-                        st.error("Шаблон презентации не найден")
-                        return
-                    
-                    # Создаём временный файл для результата
-                    temp_dir = tempfile.mkdtemp()
-                    output_path = os.path.join(temp_dir, f"презентация_меню_{date.today().strftime('%d.%m.%Y')}.pptx")
-                    
-                    # Создаём презентацию (сигнатура: template_path, excel_path, output_path)
-                    success, message = create_presentation_with_excel_data(
-                        template_path,
-                        excel_path,
-                        output_path,
-                    )
-                    
-                    if success:
-                        st.success(message)
-                        
-                        with open(output_path, "rb") as f:
-                            st.download_button(
-                                label="Скачать презентацию",
-                                data=f,
-                                file_name=f"презентация_меню_{date.today().strftime('%d.%m.%Y')}.pptx",
-                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                            )
-                    else:
-                        st.error(f"Ошибка: {message}")
-                
-                except Exception as e:
-                    st.error(f"Ошибка: {e}")
+    # После загрузки файла сразу готовим презентацию и показываем одну кнопку — скачивания
+    if not excel_file:
+        return
+
+    with st.spinner("Создание презентации..."):
+        try:
+            # Сохраняем файл
+            excel_path = save_uploaded_file(excel_file)
+
+            # Ищем шаблон презентации
+            template_path = find_template("presentation_template.pptx")
+            if not template_path:
+                st.error("Шаблон презентации не найден")
+                return
+
+            # Создаём временный файл для результата
+            temp_dir = tempfile.mkdtemp()
+            output_path = os.path.join(temp_dir, f"презентация_меню_{date.today().strftime('%d.%m.%Y')}.pptx")
+
+            # Создаём презентацию (сигнатура: template_path, excel_path, output_path)
+            success, message = create_presentation_with_excel_data(
+                template_path,
+                excel_path,
+                output_path,
+            )
+
+            if not success:
+                st.error(f"Ошибка: {message}")
+                return
+
+        except Exception as e:
+            st.error(f"Ошибка: {e}")
+            return
+
+    # Если презентация успешно создана — сразу предлагаем её скачать одной кнопкой
+    st.success(message)
+    with open(output_path, "rb") as f:
+        st.download_button(
+            label="Скачать презентацию",
+            data=f,
+            file_name=f"презентация_меню_{date.today().strftime('%d.%m.%Y')}.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        )
 
 
 def brokerage_journal_page():
