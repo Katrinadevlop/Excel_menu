@@ -729,25 +729,68 @@ class MenuTemplateFiller:
             total_filled = 0
             categories_filled = 0
             
+            # Жёсткая привязка целевых колонок под требование: все названия в A и D
+            target_name_col = {
+                'завтрак': 1,
+                'салат': 1,
+                'первое': 4,
+                'мясо': 4,
+                'курица': 4,
+                'птица': 4,
+                'рыба': 4,
+                'гарнир': 4,
+            }
+            
+            def _filter_out_headers(items: List[str]) -> List[str]:
+                out = []
+                for it in items:
+                    if not it:
+                        continue
+                    t = str(it).strip()
+                    tl = t.lower()
+                    if not t:
+                        continue
+                    # Отсекаем явные шапки и строки с единицами/ценами
+                    if any(k in tl for k in ['блюда', 'салат', 'холодн', 'закуск', 'вес', 'цена', 'руб']):
+                        continue
+                    out.append(t)
+                return out
+            
             for category, dishes in categories.items():
                 if not dishes:
                     continue
                 
-                # Находим соответствующую колонку в шаблоне
-                template_header = self.categories_mapping.get(category)
-                if not template_header:
-                    print(f"Предупреждение: Не найдено соответствие для категории '{category}'")
-                    continue
-                
-                col = self.find_column_by_header(ws, template_header)
-                # Требование: завтраки всегда пишем в колонку A (1)
-                if category == 'завтрак':
-                    col = 1
+                # Жёстко задаём колонку для названий по категории (A или D)
+                col = target_name_col.get(category)
                 if not col:
-                    print(f"Предупреждение: Не найдена колонка для '{template_header}'")
+                    print(f"Предупреждение: Не найдена целевая колонка для категории '{category}'")
                     continue
                 
-                # Находим начальную строку для данных
+                # Салаты: фиксированный блок A29-A41, A28 — заголовок
+                if category == 'салат':
+                    # Чистим A29:C41, ставим заголовок в A28
+                    for r in range(29, 42):
+                        for c in (1, 2, 3):
+                            try:
+                                ws.cell(row=r, column=c).value = None
+                            except AttributeError:
+                                pass
+                    try:
+                        ws.cell(row=28, column=1).value = 'САЛАТЫ и ХОЛОДНЫЕ ЗАКУСКИ'
+                        ws.cell(row=28, column=2).value = None
+                        ws.cell(row=28, column=3).value = None
+                    except AttributeError:
+                        pass
+                    start_row, end_row = 29, 41
+                    # Доп. защита от случайных заголовков в данных
+                    dishes = _filter_out_headers(dishes)
+                    filled_count = self.fill_template_column_limited(ws, col, dishes, start_row, end_row, category)
+                    total_filled += filled_count
+                    categories_filled += 1
+                    print(f"Категория '{category}' -> колонка {col}: добавлено {filled_count} блюд (фикс. A29-A41)")
+                    continue
+                
+                # Находим начальную строку для данных для остальных категорий
                 start_row = self.find_data_start_row(ws, col, category)
                 
                 # Особая логика ограничений по диапазону
@@ -761,7 +804,7 @@ class MenuTemplateFiller:
                     print(f"Завтраки: ограничиваем диапазон {start_row}-{end_row}")
                     filled_count = self.fill_template_column_limited(ws, col, dishes, start_row, end_row, category)
                 else:
-                    # Обычное заполнение для остальных категорий
+                    # Обычное заполнение для остальных категорий (названия в колонку D)
                     filled_count = self.fill_template_column(ws, col, dishes, start_row)
                 total_filled += filled_count
                 categories_filled += 1
@@ -1003,13 +1046,37 @@ class MenuTemplateFiller:
                 if not dishes_details:
                     continue
                 
-                # Получаем колонки для этой категории
+                # Получаем колонки для этой категории (жёстко: названия в A/D)
                 if category not in column_mapping:
                     print(f"Предупреждение: Не найдено соответствие колонок для категории '{category}'")
                     continue
                 
                 cols = column_mapping[category]
                 name_col, weight_col, price_col = cols['name'], cols['weight'], cols['price']
+                
+                # Салаты: фиксированный блок A29-A41 и заголовок A28
+                if category == 'салат':
+                    # Очищаем A29:C41 и выставляем заголовок в A28
+                    for r in range(29, 42):
+                        for c in (1, 2, 3):
+                            try:
+                                ws.cell(row=r, column=c).value = None
+                            except AttributeError:
+                                pass
+                    try:
+                        ws.cell(row=28, column=1).value = 'САЛАТЫ и ХОЛОДНЫЕ ЗАКУСКИ'
+                        ws.cell(row=28, column=2).value = None
+                        ws.cell(row=28, column=3).value = None
+                    except AttributeError:
+                        pass
+                    start_row, end_row = 29, 41
+                    filled_count = self.fill_template_with_details_limited(
+                        ws, name_col, weight_col, price_col, dishes_details, start_row, end_row, category
+                    )
+                    total_filled += filled_count
+                    categories_filled += 1
+                    print(f"Категория '{category}' -> колонки {name_col}/{weight_col}/{price_col}: добавлено {filled_count} блюд (фикс. A29-A41)")
+                    continue
                 
                 # Находим начальную строку для данных
                 start_row = self.find_data_start_row(ws, name_col, category)
@@ -1631,6 +1698,104 @@ class MenuTemplateFiller:
                 end = header_rows[i+1] - 1
                 if start < r1:
                     start = r1
+
+            # --- Приведение блока салатов к A29..A41 с заголовком в A28 ---
+            try:
+                # 1) Ищем заголовок салатов в левой части (A..C)
+                salads_header_row = None
+                def _row_has_any_of(row_idx: int, keywords: list) -> bool:
+                    for cc in (1, 2, 3):
+                        val = tpl_ws.cell(row=row_idx, column=cc).value
+                        if val and isinstance(val, str):
+                            s = val.lower()
+                            if all(k in s for k in keywords):
+                                return True
+                    return False
+                for rr in range(20, r2 + 1):  # обычно раздел после завтраков
+                    # ищем комбинации "салат" + ("холодн" или "закуск")
+                    found = False
+                    for cc in (1, 2, 3):
+                        val = tpl_ws.cell(row=rr, column=cc).value
+                        if not val:
+                            continue
+                        s = str(val).lower()
+                        if ('салат' in s) and ('холодн' in s or 'закуск' in s):
+                            salads_header_row = rr
+                            found = True
+                            break
+                    if found:
+                        break
+
+                salads_items = []  # (name, weight, price)
+                if salads_header_row:
+                    # 2) Определяем конец блока по следующему заголовку
+                    salads_end_row = r2
+                    for rr in range(salads_header_row + 1, r2 + 1):
+                        txts = []
+                        for cc in (1, 2, 3):
+                            v = tpl_ws.cell(row=rr, column=cc).value
+                            if v:
+                                txts.append(str(v).lower())
+                        joined = ' '.join(txts)
+                        if any(k in joined for k in ['первые', 'блюда из', 'гарнир', 'напит']):
+                            salads_end_row = rr - 1
+                            break
+                    # 3) Считываем блюда из A/B/C (без заголовочных строк)
+                    for rr in range(salads_header_row + 1, salads_end_row + 1):
+                        n = tpl_ws.cell(row=rr, column=1).value
+                        w = tpl_ws.cell(row=rr, column=2).value
+                        p = tpl_ws.cell(row=rr, column=3).value
+                        name = (str(n).strip() if n else '')
+                        if not name:
+                            continue
+                        low = name.lower()
+                        if any(k in low for k in ['салат', 'закуск', 'вес', 'цена', 'руб']):
+                            continue
+                        salads_items.append((name, (str(w).strip() if w else ''), (str(p).strip() if p else '')))
+
+                # 4) Очищаем целевой диапазон A29:C41 и ставим заголовок A28
+                for rr in range(29, 42):
+                    for cc in (1, 2, 3):
+                        try:
+                            tpl_ws.cell(row=rr, column=cc).value = None
+                        except AttributeError:
+                            pass
+                try:
+                    tpl_ws.cell(row=28, column=1).value = 'САЛАТЫ и ХОЛОДНЫЕ ЗАКУСКИ'
+                    tpl_ws.cell(row=28, column=2).value = None
+                    tpl_ws.cell(row=28, column=3).value = None
+                except AttributeError:
+                    pass
+
+                # 5) Записываем до 13 позиций в A29..A41
+                write_max = 13
+                rr = 29
+                for (name, weight, price) in salads_items[:write_max]:
+                    try:
+                        tpl_ws.cell(row=rr, column=1).value = name
+                    except AttributeError:
+                        pass
+                    try:
+                        tpl_ws.cell(row=rr, column=2).value = weight
+                    except AttributeError:
+                        pass
+                    try:
+                        tpl_ws.cell(row=rr, column=3).value = price
+                    except AttributeError:
+                        pass
+                    rr += 1
+
+                # 6) Опционально: очищаем исходный блок салатов, если он не совпадает с целевым
+                if salads_header_row and not (salads_header_row == 28):
+                    for rr in range(salads_header_row, min(salads_end_row + 1, r2 + 1)):
+                        for cc in (1, 2, 3):
+                            try:
+                                tpl_ws.cell(row=rr, column=cc).value = None
+                            except AttributeError:
+                                pass
+            except Exception as _sal_e:
+                # Не валим всю операцию из‑за проблем с блоком салатов
+                print(f"Предупреждение: не удалось нормализовать блок салатов: {_sal_e}")
                 if end > r2:
                     end = r2
                 for rr in range(start, end + 1):
