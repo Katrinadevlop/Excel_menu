@@ -1666,15 +1666,7 @@ class MenuTemplateFiller:
                     return True
                 return False
 
-            # Находим все заголовки в колонке D
-            header_rows = []
-            for rr in range(r1, r2 + 1):
-                dv = tpl_ws.cell(row=rr, column=4).value  # D
-                if _is_header(dv):
-                    header_rows.append(rr)
-            header_rows.append(r2 + 1)  # хвост
-
-            # Для каждого блока после заголовка приводим D/E/F к схеме: D=название, E=вес, F=цена (если есть)
+            # Для правой части приводим D/E/F к схеме: D=название, E=вес, F=цена (если есть)
             def _is_dish_like(val) -> bool:
                 if val in (None, ''):
                     return False
@@ -1686,6 +1678,7 @@ class MenuTemplateFiller:
                 if _looks_weight(s):
                     return False
                 return True
+
             def _is_price_like(val) -> bool:
                 if val in (None, ''):
                     return False
@@ -1693,168 +1686,45 @@ class MenuTemplateFiller:
                 # число или варианты через '/'
                 return _re.search(r"^\s*\d+(?:[\.,]\d{1,2})?(?:\s*/\s*\d+(?:[\.,]\d{1,2})?)*\s*$", s) is not None
 
-            for i in range(len(header_rows) - 1):
-                start = header_rows[i] + 1
-                end = header_rows[i+1] - 1
-                if start < r1:
-                    start = r1
+            for rr in range(r1, r2 + 1):
+                d = tpl_ws.cell(row=rr, column=4).value
+                e = tpl_ws.cell(row=rr, column=5).value
+                f = tpl_ws.cell(row=rr, column=6).value
 
-            # --- Приведение блока салатов к A29..A41 с заголовком в A28 ---
-            try:
-                # 1) Ищем заголовок салатов в левой части (A..C)
-                salads_header_row = None
-                def _row_has_any_of(row_idx: int, keywords: list) -> bool:
-                    for cc in (1, 2, 3):
-                        val = tpl_ws.cell(row=row_idx, column=cc).value
-                        if val and isinstance(val, str):
-                            s = val.lower()
-                            if all(k in s for k in keywords):
-                                return True
-                    return False
-                for rr in range(20, r2 + 1):  # обычно раздел после завтраков
-                    # ищем комбинации "салат" + ("холодн" или "закуск")
-                    found = False
-                    for cc in (1, 2, 3):
-                        val = tpl_ws.cell(row=rr, column=cc).value
-                        if not val:
-                            continue
-                        s = str(val).lower()
-                        if ('салат' in s) and ('холодн' in s or 'закуск' in s):
-                            salads_header_row = rr
-                            found = True
-                            break
-                    if found:
-                        break
+                # не трогаем заголовки категорий
+                if _is_header(d) or _is_header(e) or _is_header(f):
+                    continue
 
-                salads_items = []  # (name, weight, price)
-                if salads_header_row:
-                    # 2) Определяем конец блока по следующему заголовку
-                    salads_end_row = r2
-                    for rr in range(salads_header_row + 1, r2 + 1):
-                        txts = []
-                        for cc in (1, 2, 3):
-                            v = tpl_ws.cell(row=rr, column=cc).value
-                            if v:
-                                txts.append(str(v).lower())
-                        joined = ' '.join(txts)
-                        if any(k in joined for k in ['первые', 'блюда из', 'гарнир', 'напит']):
-                            salads_end_row = rr - 1
-                            break
-                    # 3) Считываем блюда из A/B/C (без заголовочных строк)
-                    for rr in range(salads_header_row + 1, salads_end_row + 1):
-                        n = tpl_ws.cell(row=rr, column=1).value
-                        w = tpl_ws.cell(row=rr, column=2).value
-                        p = tpl_ws.cell(row=rr, column=3).value
-                        name = (str(n).strip() if n else '')
-                        if not name:
-                            continue
-                        low = name.lower()
-                        if any(k in low for k in ['салат', 'закуск', 'вес', 'цена', 'руб']):
-                            continue
-                        salads_items.append((name, (str(w).strip() if w else ''), (str(p).strip() if p else '')))
+                d_is_dish = _is_dish_like(d)
+                e_is_dish = _is_dish_like(e)
+                d_is_w = _looks_weight(d)
+                f_is_w = _looks_weight(f)
+                f_is_p = _is_price_like(f) and (not f_is_w)
+                d_is_p = _is_price_like(d) and (not d_is_w)
 
-                # 4) Очищаем целевой диапазон A29:C41 и ставим заголовок A28
-                for rr in range(29, 42):
-                    for cc in (1, 2, 3):
-                        try:
-                            tpl_ws.cell(row=rr, column=cc).value = None
-                        except AttributeError:
-                            pass
-                try:
-                    tpl_ws.cell(row=28, column=1).value = 'САЛАТЫ и ХОЛОДНЫЕ ЗАКУСКИ'
-                    tpl_ws.cell(row=28, column=2).value = None
-                    tpl_ws.cell(row=28, column=3).value = None
-                except AttributeError:
-                    pass
+                # Основной кейс: блюдо оказалось в E (а D пустая/вес/мусор)
+                if (not d_is_dish) and e_is_dish:
+                    new_d = e
+                    # Вес стараемся взять из F (если там вес), иначе из D (если там вес)
+                    if f_is_w:
+                        new_e = f
+                    elif d_is_w:
+                        new_e = d
+                    else:
+                        new_e = None
 
-                # 5) Записываем до 13 позиций в A29..A41
-                write_max = 13
-                rr = 29
-                for (name, weight, price) in salads_items[:write_max]:
-                    try:
-                        tpl_ws.cell(row=rr, column=1).value = name
-                    except AttributeError:
-                        pass
-                    try:
-                        tpl_ws.cell(row=rr, column=2).value = weight
-                    except AttributeError:
-                        pass
-                    try:
-                        tpl_ws.cell(row=rr, column=3).value = price
-                    except AttributeError:
-                        pass
-                    rr += 1
+                    # Цена: если F выглядит как цена — оставим в F; иначе если D была ценой — перенесём
+                    if f_is_p:
+                        new_f = f
+                    elif d_is_p:
+                        new_f = d
+                    else:
+                        new_f = None
 
-                # 6) Опционально: очищаем исходный блок салатов, если он не совпадает с целевым
-                if salads_header_row and not (salads_header_row == 28):
-                    for rr in range(salads_header_row, min(salads_end_row + 1, r2 + 1)):
-                        for cc in (1, 2, 3):
-                            try:
-                                tpl_ws.cell(row=rr, column=cc).value = None
-                            except AttributeError:
-                                pass
-            except Exception as _sal_e:
-                # Не валим всю операцию из‑за проблем с блоком салатов
-                print(f"Предупреждение: не удалось нормализовать блок салатов: {_sal_e}")
-                if end > r2:
-                    end = r2
-                for rr in range(start, end + 1):
-                    d = tpl_ws.cell(row=rr, column=4).value
-                    e = tpl_ws.cell(row=rr, column=5).value
-                    f = tpl_ws.cell(row=rr, column=6).value
-                    d_is_dish = _is_dish_like(d)
-                    e_is_dish = _is_dish_like(e)
-                    d_is_w = _looks_weight(d)
-                    e_is_w = _looks_weight(e)
-                    f_is_w = _looks_weight(f)
-                    f_is_p = _is_price_like(f)
+                    tpl_ws.cell(row=rr, column=4).value = new_d
+                    tpl_ws.cell(row=rr, column=5).value = new_e
+                    tpl_ws.cell(row=rr, column=6).value = new_f
 
-                    # Если D не блюдо, а E похоже на блюдо — переносим E->D
-                    if (not d_is_dish) and e_is_dish:
-                        new_d = e
-                        # Вес берем из D (если там вес) или из F (если там вес), иначе оставляем как есть из E, если это вес
-                        new_e = ''
-                        if d_is_w:
-                            new_e = d
-                        elif f_is_w:
-                            new_e = f
-                        elif e_is_w:
-                            new_e = e
-                        # Цена — если F выглядит как цена, оставляем в F; иначе не трогаем
-                        try:
-                            tpl_ws.cell(row=rr, column=4).value = new_d
-                        except AttributeError:
-                            pass
-                        try:
-                            tpl_ws.cell(row=rr, column=5).value = new_e
-                        except AttributeError:
-                            pass
-                        # F оставляем как есть (может быть ценой)
-                        continue
-
-                    # Если D пусто, а E пусто, но F похоже на блюдо — F->D
-                    if (d in (None, '')) and (e in (None, '')) and _is_dish_like(f):
-                        try:
-                            tpl_ws.cell(row=rr, column=4).value = f
-                        except AttributeError:
-                            pass
-                        try:
-                            tpl_ws.cell(row=rr, column=5).value = ''
-                        except AttributeError:
-                            pass
-                        continue
-
-                    # Если D — вес, а E — не вес (скорее блюдо) — обмен местами
-                    if d_is_w and not e_is_w and e not in (None, ''):
-                        try:
-                            tpl_ws.cell(row=rr, column=4).value = e
-                        except AttributeError:
-                            pass
-                        try:
-                            tpl_ws.cell(row=rr, column=5).value = d
-                        except AttributeError:
-                            pass
-                        continue
 
             # Обновляем дату в верхней части «Кассы» из источника (добавляем день недели)
             try:
@@ -1970,11 +1840,6 @@ class MenuTemplateFiller:
             except Exception:
                 pass
             
-            # Сортировка категорий в указанных диапазонах
-            try:
-                self.sort_kassa_ranges(tpl_ws)
-            except Exception:
-                pass
 
             tpl_wb.save(output_path)
             return True, f"Скопировано {copied} ячеек в A6..F42; дата обновлена; ссылки ХЦ установлены; единицы добавлены; категории отсортированы"

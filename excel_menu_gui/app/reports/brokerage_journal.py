@@ -166,10 +166,11 @@ class BrokerageJournalGenerator:
             left_list = [n for n in left_list if not self._should_exclude_by_name(n)]
             # Для правого столбца используем исходный список из D7:D38 без добавок (right_source)
 
-            # Левый столбец A7..A43: копируем плотно (без пустых строк) из меню, пропуская A30
-            values_a = [a_map[r] for r in sorted(a_map.keys())]
+            # Левый столбец A7..A43:
+            # - если меню уже в формате "Касса" (A7..A43) — берём напрямую оттуда,
+            # - иначе используем извлеченные категории (left_list).
+            values_a = [a_map[r] for r in sorted(a_map.keys())] if a_map else left_list
             inserted_left = 0
-            # Плотная запись сверху вниз
             for idx, name in enumerate(values_a[:37]):  # максимум A7..A43
                 ws.cell(row=7 + idx, column=1, value=name)
                 inserted_left += 1
@@ -184,7 +185,7 @@ class BrokerageJournalGenerator:
                 inserted_right += 1
 
             wb.save(output_path)
-            return True, f"Бракеражный журнал создан: {date_str} (A: {inserted_left}, G: {inserted_right})"
+            return True, f"Бракеражный журнал успешно создан: {date_str} (A: {inserted_left}, G: {inserted_right})"
         except Exception as e:
             return False, f"Ошибка при создании бракеражного журнала: {str(e)}"
     

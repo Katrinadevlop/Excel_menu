@@ -843,6 +843,66 @@ def extract_dishes_from_excel(excel_path: str, category_keywords: List[str]) -> 
     return extract_dishes_from_excel_rows(excel_path, category_keywords)
 
 
+def _norm_key(s: str) -> str:
+    if s is None:
+        return ""
+    return " ".join(str(s).strip().lower().replace('ё', 'е').split())
+
+
+def extract_all_dishes_with_details(menu_path: str) -> List[DishItem]:
+    """Извлекает *все* блюда из меню (имя + вес + цена), чтобы использовать в поиске/ценниках.
+
+    Алгоритм: пробуем собрать блюда по основным категориям (завтраки/салаты/первые/мясо/птица/рыба/гарниры)
+    через существующие extract_dishes_from_excel*.
+
+    Возвращает список без дублей по названию (сохраняем наиболее "полное" блюдо, где есть вес/цена).
+    """
+
+    category_keyword_sets: List[List[str]] = [
+        ["ЗАВТРАК", "ЗАВТРАКИ"],
+        ["САЛАТЫ", "ХОЛОДНЫЕ ЗАКУСКИ"],
+        ["ПЕРВЫЕ БЛЮДА"],
+        ["БЛЮДА ИЗ МЯСА", "МЯСО"],
+        ["БЛЮДА ИЗ ПТИЦЫ", "ПТИЦА", "КУРИЦА"],
+        ["БЛЮДА ИЗ РЫБЫ", "РЫБА"],
+        ["ГАРНИР", "ГАРНИРЫ"],
+    ]
+
+    merged: dict[str, DishItem] = {}
+
+    for kw in category_keyword_sets:
+        try:
+            items = extract_dishes_from_excel(menu_path, kw)
+        except Exception:
+            items = []
+
+        for it in items:
+            key = _norm_key(it.name)
+            if not key:
+                continue
+            prev = merged.get(key)
+            if prev is None:
+                merged[key] = it
+                continue
+
+            # Обновляем запись, если новая более "полная"
+            def score(d: DishItem) -> int:
+                return int(bool(d.name)) + int(bool(d.weight)) + int(bool(d.price))
+
+            if score(it) > score(prev):
+                merged[key] = it
+            else:
+                # дополним недостающие поля
+                if not prev.weight and it.weight:
+                    prev.weight = it.weight
+                if not prev.price and it.price:
+                    prev.price = it.price
+
+    out = list(merged.values())
+    out.sort(key=lambda d: _norm_key(d.name))
+    return out
+
+
 def extract_dishes_from_excel_rows(excel_path: str, category_keywords: List[str]) -> List[DishItem]:
     """
     Извлекает блюда при построчной структуре: ищет строку заголовка категории,

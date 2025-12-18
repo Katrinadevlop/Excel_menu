@@ -21,8 +21,9 @@ class AppStyles:
     """
     
     # === WINDOW SETTINGS ===
-    WINDOW_DEFAULT_SIZE = (1000, 760)
-    WINDOW_MIN_SIZE = (800, 600)
+    WINDOW_DEFAULT_SIZE = (1400, 820)
+    # При повышенном DPI/масштабе Windows (125–150%) маленькое окно визуально «сминает» интерфейс.
+    WINDOW_MIN_SIZE = (1400, 760)
     WINDOW_ICON_SIZE = 256
     
     # === SPACING AND MARGINS ===
@@ -43,10 +44,12 @@ class AppStyles:
     TINY_BORDER_RADIUS = 4
     
     # === COMPONENT HEIGHTS ===
-    FILE_GROUP_MIN_HEIGHT = 45
-    EXCEL_GROUP_MIN_HEIGHT = 95
-    PARAMS_GROUP_MAX_HEIGHT = 55
-    SPINBOX_MIN_HEIGHT = 20
+    # Важно: при повышенном DPI (125%/150%) слишком маленькие фиксированные высоты
+    # «сминают» содержимое групп. Поэтому делаем чуть больше.
+    FILE_GROUP_MIN_HEIGHT = 70
+    EXCEL_GROUP_MIN_HEIGHT = 140
+    PARAMS_GROUP_MAX_HEIGHT = 70
+    SPINBOX_MIN_HEIGHT = 24
     
     # === ICON GRADIENT COLORS ===
     ICON_GRADIENT_START = "#FF7E5F"
@@ -301,27 +304,22 @@ class ComponentStyles:
     @classmethod
     def style_file_group(cls, group_box) -> None:
         """Применяет стандартную стилизацию к группам выбора файлов.
-        
-        Устанавливает размерную политику и минимальную высоту
-        для групп выбора файлов в интерфейсе сравнения.
-        
-        Args:
-            group_box: QGroupBox для стилизации
+
+        На Windows при увеличенном DPI фиксированная вертикальная политика
+        может приводить к «сжатию» содержимого. Поэтому делаем группу
+        растягиваемой по высоте внутри scroll area.
         """
-        LayoutStyles.apply_size_policy(group_box, LayoutStyles.EXPANDING_FIXED)
+        LayoutStyles.apply_size_policy(group_box, LayoutStyles.EXPANDING_EXPANDING)
         group_box.setMinimumHeight(AppStyles.FILE_GROUP_MIN_HEIGHT)
     
     @classmethod
     def style_excel_group(cls, group_box) -> None:
         """Применяет стилизацию к группам выбора Excel-файлов.
-        
-        Устанавливает размерную политику и увеличенную минимальную высоту
-        для групп выбора Excel-файлов (выше чем обычные группы файлов).
-        
-        Args:
-            group_box: QGroupBox для стилизации
+
+        Аналогично style_file_group: не фиксируем по высоте, чтобы
+        не «сминалось» при DPI scaling.
         """
-        LayoutStyles.apply_size_policy(group_box, LayoutStyles.EXPANDING_FIXED)
+        LayoutStyles.apply_size_policy(group_box, LayoutStyles.EXPANDING_EXPANDING)
         group_box.setMinimumHeight(AppStyles.EXCEL_GROUP_MIN_HEIGHT)
     
     @classmethod
@@ -418,22 +416,17 @@ class StyleManager:
     
     @classmethod
     def setup_main_window(cls, window) -> None:
-        """Применяет всю стилизацию к главному окну.
-        
-        Устанавливает иконку приложения, размер окна и основную таблицу стилей.
-        Это основная функция для инициализации стилей главного окна.
-        
-        Args:
-            window: QMainWindow для стилизации
-        """
-        # Set window properties
+        """Применяет всю стилизацию к главному окну."""
         if hasattr(window, 'setWindowIcon'):
             window.setWindowIcon(AppStyles.create_app_icon())
-        
+
         if hasattr(window, 'resize'):
             window.resize(*AppStyles.WINDOW_DEFAULT_SIZE)
-        
-        # Apply main stylesheet
+
+        # Минимальный размер, чтобы интерфейс не «сминался»
+        if hasattr(window, 'setMinimumSize'):
+            window.setMinimumSize(*AppStyles.WINDOW_MIN_SIZE)
+
         if hasattr(window, 'setStyleSheet'):
             window.setStyleSheet(StyleSheets.get_main_stylesheet())
     

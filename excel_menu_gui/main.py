@@ -2,16 +2,19 @@ import os
 import sys
 import shutil
 import logging
+import hashlib
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QMimeData, QSize, QUrl
+from PySide6.QtCore import Qt, QMimeData, QSize, QUrl, QSettings
 from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QBrush, QLinearGradient, QFont, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QBoxLayout,
     QLabel, QPushButton, QFileDialog, QTextEdit, QComboBox, QLineEdit,
     QGroupBox, QCheckBox, QSpinBox, QRadioButton, QButtonGroup, QMessageBox, QFrame, QSizePolicy, QScrollArea,
+    QListWidget, QListWidgetItem, QInputDialog,
 )
 
 from app.services.comparator import compare_and_highlight, get_sheet_names, ColumnParseError
@@ -23,6 +26,9 @@ from app.services.template_linker import default_template_path
 from app.gui.theme import ThemeMode, apply_theme, start_system_theme_watcher
 from app.reports.presentation_handler import create_presentation_with_excel_data
 from app.reports.brokerage_journal import create_brokerage_journal_from_menu
+from app.reports.pricelist_excel import create_pricelist_xlsx
+from app.services.dish_extractor import extract_all_dishes_with_details, DishItem
+from app.integrations.iiko_rms_client import IikoRmsClient, IikoApiError
 from app.services.menu_template_filler import MenuTemplateFiller
 from app.gui.ui_styles import (
     AppStyles, ButtonStyles, LayoutStyles, StyleSheets, ComponentStyles,
@@ -118,6 +124,8 @@ class FileConfig:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        # Локальные настройки (Windows Registry) для запоминания параметров iiko
+        self._settings = QSettings("excel_menu_gui", "excel_menu_gui")
         self.setWindowTitle("Работа с меню")
         # Apply centralized styling
         StyleManager.setup_main_window(self)
@@ -317,6 +325,90 @@ class MainWindow(QMainWindow):
         self.contentLayout.addWidget(self.paramsBox)
         self.paramsBox.setVisible(False)
 
+        # ===== ЦЕННИКИ: поиск + выбор =====
+        self._pricelist_dishes: List[DishItem] = []
+        self._pricelist_selected_keys: set[str] = set()
+
+        # Источник блюд: только iiko (без экселя и без UI-настроек подключения)
+        self._iiko_base_url = str(self._settings.value("iiko/base_url", "https://287-772-687.iiko.it/resto"))
+        self._iiko_login = str(self._settings.value("iiko/login", "user"))
+
+        # Храним только sha1-хэш пароля (как требует iikoRMS resto API).
+        self._iiko_pass_sha1_cached = str(self._settings.value("iiko/pass_sha1", ""))
+
+        # Миграция со старой версии: если вдруг сохранён plaintext-пароль — конвертируем и удаляем.
+        try:
+            legacy_pwd = str(self._settings.value("iiko/password", ""))
+            if (not self._iiko_pass_sha1_cached) and legacy_pwd:
+                self._iiko_pass_sha1_cached = hashlib.sha1(legacy_pwd.encode("utf-8")).hexdigest()
+                self._settings.setValue("iiko/pass_sha1", self._iiko_pass_sha1_cached)
+                self._settings.remove("iiko/password")
+        except Exception:
+            pass
+
+        src_row = QWidget(); src_layout = QHBoxLayout(src_row)
+        LayoutStyles.apply_margins(src_layout, LayoutStyles.NO_MARGINS)
+        src_layout.addWidget(QLabel("Источник: iiko"))
+        src_layout.addStretch(1)
+
+        self.edDishSearch = QLineEdit()
+        self.edDishSearch.setPlaceholderText("Начните вводить название блюда… (Enter — добавить)")
+        self.edDishSearch.textChanged.connect(self._update_pricelist_suggestions)
+        self.edDishSearch.returnPressed.connect(self._add_pricelist_from_enter)
+
+        self.lblPricelistInfo = QLabel("1) Нажмите 'Загрузить блюда'  2) Введите название")
+
+        self.btnLoadDishes = QPushButton("Загрузить блюда")
+        self.btnLoadDishes.clicked.connect(self._load_pricelist_dishes)
+
+        self.btnShowAllDishes = QPushButton("Показать все блюда")
+        self.btnShowAllDishes.clicked.connect(self._show_all_pricelist_dishes)
+
+        btns_row = QWidget(); btns_layout = QHBoxLayout(btns_row)
+        LayoutStyles.apply_margins(btns_layout, LayoutStyles.NO_MARGINS)
+        btns_layout.addWidget(self.btnLoadDishes)
+        btns_layout.addWidget(self.btnShowAllDishes)
+        btns_layout.addStretch(1)
+
+        self.lstDishSuggestions = QListWidget()
+        self.lstDishSuggestions.setMinimumHeight(220)
+        self.lstDishSuggestions.itemClicked.connect(self._on_pricelist_suggestion_clicked)
+        self.lstDishSuggestions.itemDoubleClicked.connect(self._on_pricelist_suggestion_clicked)
+
+        self.lstSelectedDishes = QListWidget()
+        self.lstSelectedDishes.setMinimumHeight(160)
+
+        self.btnClearSelectedDishes = QPushButton("Очистить выбор")
+        self.btnClearSelectedDishes.clicked.connect(self._clear_pricelist_selection)
+
+        pricelist_box = QWidget(); pricelist_layout = QVBoxLayout(pricelist_box)
+        pricelist_layout.addWidget(src_row)
+        pricelist_layout.addWidget(label_caption("Поиск блюда"))
+        pricelist_layout.addWidget(self.edDishSearch)
+        pricelist_layout.addWidget(self.lblPricelistInfo)
+        pricelist_layout.addWidget(btns_row)
+        pricelist_layout.addWidget(label_caption("Подсказки (кликните, чтобы добавить)"))
+        pricelist_layout.addWidget(self.lstDishSuggestions)
+        pricelist_layout.addWidget(label_caption("Выбранные блюда (с галочками)"))
+        pricelist_layout.addWidget(self.lstSelectedDishes)
+        pricelist_layout.addWidget(self.btnClearSelectedDishes)
+
+        self.grpPricelist = nice_group("Ценники: выбрать блюда", pricelist_box)
+        self.contentLayout.addWidget(self.grpPricelist)
+        self.grpPricelist.setVisible(False)
+
+
+        # Панель действий внизу для ценников (фиксированная)
+        self.pricelistActionsPanel = QWidget(); self.pricelistActionsPanel.setObjectName("actionsPanel")
+        self.pricelistActionsLayout = QHBoxLayout(self.pricelistActionsPanel)
+        LayoutStyles.apply_margins(self.pricelistActionsLayout, LayoutStyles.CONTENT_TOP_MARGIN)
+        self.btnCreatePricelist = QPushButton("Сформировать ценники (Excel)")
+        self.btnCreatePricelist.clicked.connect(self.do_create_pricelist_excel)
+        self.pricelistActionsLayout.addStretch(1)
+        self.pricelistActionsLayout.addWidget(self.btnCreatePricelist)
+        self.rootLayout.addWidget(self.pricelistActionsPanel)
+        self.pricelistActionsPanel.setVisible(False)
+
         # Добавляем нижний растягивающий элемент, чтобы контент не растягивался равномерно, а был прижат кверху
         self.contentLayout.addStretch(1)
 
@@ -497,25 +589,26 @@ class MainWindow(QMainWindow):
 
     def show_compare_sections(self):
         try:
-            # Скрываем панель презентаций и её панель действий
+            # Скрываем панели, не относящиеся к сравнению
             if hasattr(self, "grpExcelFile"):
                 self.grpExcelFile.setVisible(False)
             if hasattr(self, "presentationActionsPanel"):
                 self.presentationActionsPanel.setVisible(False)
-            # Скрываем панель бракеражного журнала при переходе на сравнение
             if hasattr(self, "brokerageActionsPanel"):
                 self.brokerageActionsPanel.setVisible(False)
-            # Скрываем панель шаблонов при переходе на сравнение
             if hasattr(self, "templateActionsPanel"):
                 self.templateActionsPanel.setVisible(False)
-            
+            if hasattr(self, "grpPricelist"):
+                self.grpPricelist.setVisible(False)
+            if hasattr(self, "pricelistActionsPanel"):
+                self.pricelistActionsPanel.setVisible(False)
+
             # Показать формы сравнения и панель действий
             if hasattr(self, "grpFirst"):
                 self.grpFirst.setVisible(True)
             if hasattr(self, "grpSecond"):
                 self.grpSecond.setVisible(True)
             if hasattr(self, "paramsBox"):
-                # показываем группу, но оставляем скрытой по умолчанию
                 self.paramsBox.setVisible(True)
                 self.paramsBox.setChecked(False)
             if hasattr(self, "actionsPanel"):
@@ -548,13 +641,15 @@ class MainWindow(QMainWindow):
                 self.presentationActionsPanel.setVisible(False)
             if hasattr(self, "brokerageActionsPanel"):
                 self.brokerageActionsPanel.setVisible(False)
+            if hasattr(self, "grpPricelist"):
+                self.grpPricelist.setVisible(False)
+            if hasattr(self, "pricelistActionsPanel"):
+                self.pricelistActionsPanel.setVisible(False)
             
             # Показываем панель для работы с шаблоном меню и её панель действий
             if hasattr(self, "grpExcelFile"):
                 self.grpExcelFile.setVisible(True)
-                # Обновляем заголовок группы
                 self.grpExcelFile.setTitle("Файл меню для заполнения шаблона")
-                # Обновляем подсказку
                 self.edExcelPath.setPlaceholderText("Выберите Excel файл с меню для заполнения шаблона...")
             if hasattr(self, "templateActionsPanel"):
                 self.templateActionsPanel.setVisible(True)
@@ -574,19 +669,19 @@ class MainWindow(QMainWindow):
                 self.paramsBox.setVisible(False)
             if hasattr(self, "actionsPanel"):
                 self.actionsPanel.setVisible(False)
-            # Скрываем панель бракеражного журнала при переходе на презентации
             if hasattr(self, "brokerageActionsPanel"):
                 self.brokerageActionsPanel.setVisible(False)
-            # Скрываем панель шаблонов при переходе на презентации
             if hasattr(self, "templateActionsPanel"):
                 self.templateActionsPanel.setVisible(False)
+            if hasattr(self, "grpPricelist"):
+                self.grpPricelist.setVisible(False)
+            if hasattr(self, "pricelistActionsPanel"):
+                self.pricelistActionsPanel.setVisible(False)
             
             # Показываем панель для работы с презентациями и её панель действий
             if hasattr(self, "grpExcelFile"):
                 self.grpExcelFile.setVisible(True)
-                # Обновляем заголовок группы для презентации
                 self.grpExcelFile.setTitle("Файл меню для презентации")
-                # Обновляем подсказку для презентации
                 self.edExcelPath.setPlaceholderText("Выберите Excel файл с меню (салаты, первые блюда, мясо, птица, рыба, гарниры)...")
             if hasattr(self, "presentationActionsPanel"):
                 self.presentationActionsPanel.setVisible(True)
@@ -624,45 +719,56 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", str(e))
 
     def do_download_pricelists(self):
-        """Скачивает (копирует) шаблон ценников из папки templates/."""
+        """Показывает раздел для формирования ценников по выбранным блюдам."""
         try:
-            # Ищем файл ценников среди шаблонов
-            candidates = [
-                "Ценники.xlsx",
-                "ценники.xlsx",
-                "Шаблон ценников.xlsx",
-                "Шаблон ценников пример.xlsx",
-            ]
+            # Скрываем другие панели
+            if hasattr(self, "grpFirst"):
+                self.grpFirst.setVisible(False)
+            if hasattr(self, "grpSecond"):
+                self.grpSecond.setVisible(False)
+            if hasattr(self, "paramsBox"):
+                self.paramsBox.setVisible(False)
+            if hasattr(self, "actionsPanel"):
+                self.actionsPanel.setVisible(False)
+            if hasattr(self, "presentationActionsPanel"):
+                self.presentationActionsPanel.setVisible(False)
+            if hasattr(self, "brokerageActionsPanel"):
+                self.brokerageActionsPanel.setVisible(False)
+            if hasattr(self, "templateActionsPanel"):
+                self.templateActionsPanel.setVisible(False)
 
-            src_path: Optional[str] = None
-            for name in candidates:
-                p = find_template(name)
-                if p and Path(p).exists():
-                    src_path = p
-                    break
+            # Для ценников НЕ показываем общий блок выбора Excel-файла (он мешает и не нужен при iiko)
+            if hasattr(self, "grpExcelFile"):
+                self.grpExcelFile.setVisible(False)
 
-            if not src_path:
-                QMessageBox.warning(
-                    self,
-                    "Шаблон",
-                    "Шаблон ценников не найден.\n\n"
-                    "Положите файл 'Ценники.xlsx' (или 'Шаблон ценников.xlsx') в папку templates/.",
-                )
-                return
+            # Показываем панель ценников
+            if hasattr(self, "grpPricelist"):
+                self.grpPricelist.setVisible(True)
+            if hasattr(self, "pricelistActionsPanel"):
+                self.pricelistActionsPanel.setVisible(True)
 
-            desktop = Path.home() / "Desktop"
-            suggested_path = str(desktop / Path(src_path).name)
+            # Сброс состояния
+            self._pricelist_dishes = []
+            self._pricelist_selected_keys = set()
+            self.lblPricelistInfo.setText("1) Нажмите 'Загрузить блюда'  2) Начните ввод")
+            self.edDishSearch.clear()
+            self.lstDishSuggestions.clear()
+            self.lstSelectedDishes.clear()
 
-            save_path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Сохранить ценники",
-                suggested_path,
-                "Excel (*.xlsx);;Все файлы (*.*)",
-            )
-            if not save_path:
-                return
 
-            shutil.copy(src_path, save_path)
+            try:
+                self.edDishSearch.setFocus()
+            except Exception:
+                pass
+
+            # Автозагрузка блюд из iiko: только если пароль уже сохранён.
+            # Иначе пользователь нажмёт кнопку «Загрузить блюда» и введёт пароль один раз.
+            try:
+                if (not self._pricelist_dishes) and bool(self._iiko_pass_sha1_cached):
+                    self._load_pricelist_dishes()
+            except Exception:
+                pass
+
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
     
@@ -731,16 +837,17 @@ class MainWindow(QMainWindow):
                 self.actionsPanel.setVisible(False)
             if hasattr(self, "presentationActionsPanel"):
                 self.presentationActionsPanel.setVisible(False)
-            # Скрываем панель шаблонов при переходе к бракеражному журналу
             if hasattr(self, "templateActionsPanel"):
                 self.templateActionsPanel.setVisible(False)
+            if hasattr(self, "grpPricelist"):
+                self.grpPricelist.setVisible(False)
+            if hasattr(self, "pricelistActionsPanel"):
+                self.pricelistActionsPanel.setVisible(False)
             
             # Показываем панель для работы с бракеражным журналом и её панель действий
             if hasattr(self, "grpExcelFile"):
                 self.grpExcelFile.setVisible(True)
-                # Обновляем заголовок группы для бракеражного журнала
                 self.grpExcelFile.setTitle("Файл меню для бракеражного журнала")
-                # Обновляем подсказку для бракеражного журнала
                 self.edExcelPath.setPlaceholderText("Выберите Excel файл с меню для бракеражного журнала...")
             if hasattr(self, "brokerageActionsPanel"):
                 self.brokerageActionsPanel.setVisible(True)
@@ -882,6 +989,231 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    # ===== ЦЕННИКИ: логика =====
+    def _ensure_iiko_pass_sha1(self) -> bool:
+        """Если sha1(pass) не сохранён — спрашиваем пароль один раз и сохраняем только sha1."""
+        if self._iiko_pass_sha1_cached:
+            return True
+
+        pwd, ok = QInputDialog.getText(
+            self,
+            "iiko",
+            "Введите пароль iiko (сохранится только SHA1-хэш на этом компьютере):",
+            QLineEdit.Password,
+        )
+        if not ok:
+            return False
+
+        pwd = (pwd or "").strip()
+        if not pwd:
+            return False
+
+        self._iiko_pass_sha1_cached = hashlib.sha1(pwd.encode("utf-8")).hexdigest()
+        try:
+            self._settings.setValue("iiko/pass_sha1", self._iiko_pass_sha1_cached)
+            # На всякий случай удалим возможный legacy plaintext
+            self._settings.remove("iiko/password")
+        except Exception:
+            pass
+
+        return True
+
+    def _pl_key(self, name: str) -> str:
+        return " ".join(str(name).strip().lower().replace('ё', 'е').split())
+
+    def _format_dish_line(self, d: DishItem) -> str:
+        parts = [d.name]
+        if d.weight:
+            parts.append(str(d.weight))
+        if d.price:
+            parts.append(str(d.price))
+        return " — ".join(parts)
+
+    def _load_pricelist_dishes(self):
+        try:
+            if not self._ensure_iiko_pass_sha1():
+                return
+
+            base_url = (self._iiko_base_url or "").strip()
+            login = (self._iiko_login or "").strip()
+            pass_sha1 = (self._iiko_pass_sha1_cached or "").strip()
+
+            if not base_url or not login or not pass_sha1:
+                QMessageBox.warning(self, "Внимание", "Не заданы параметры подключения iiko.")
+                return
+
+            client = IikoRmsClient(base_url=base_url, login=login, pass_sha1=pass_sha1)
+            products = client.get_products()
+
+            dishes = [DishItem(name=p.name, weight=p.weight, price=p.price) for p in products]
+            self._pricelist_dishes = dishes
+            self.lblPricelistInfo.setText(f"Загружено из iiko: {len(dishes)}")
+            self._update_pricelist_suggestions(self.edDishSearch.text())
+        except IikoApiError as e:
+            msg = str(e)
+            # Если пароль неверный/просрочен — сбросим сохранённый и попросим ввести заново
+            if ("401" in msg) or ("Unauthorized" in msg):
+                try:
+                    self._settings.remove("iiko/pass_sha1")
+                    self._settings.remove("iiko/password")
+                except Exception:
+                    pass
+                self._iiko_pass_sha1_cached = ""
+                QMessageBox.warning(self, "iiko", "Доступ не получен (401). Данные сброшены — введите пароль ещё раз.")
+                return
+            QMessageBox.critical(self, "iiko", msg)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _show_all_pricelist_dishes(self):
+        """Показывает список блюд без фильтра (с ограничением по количеству)."""
+        try:
+            if not self._pricelist_dishes:
+                if not self._ensure_iiko_pass_sha1():
+                    return
+                self._load_pricelist_dishes()
+
+            self.lstDishSuggestions.clear()
+            if not self._pricelist_dishes:
+                return
+
+            # Чтобы UI не зависал на огромной номенклатуре
+            limit = 500
+            for d in self._pricelist_dishes[:limit]:
+                item = QListWidgetItem(self._format_dish_line(d))
+                item.setData(Qt.UserRole, d)
+                self.lstDishSuggestions.addItem(item)
+
+            if len(self._pricelist_dishes) > limit:
+                self.lblPricelistInfo.setText(
+                    f"Загружено из iiko: {len(self._pricelist_dishes)} (показаны первые {limit})"
+                )
+            else:
+                self.lblPricelistInfo.setText(f"Загружено из iiko: {len(self._pricelist_dishes)}")
+
+        except IikoApiError as e:
+            QMessageBox.critical(self, "iiko", str(e))
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _update_pricelist_suggestions(self, text: str):
+        self.lstDishSuggestions.clear()
+
+        q = (text or "").strip().lower().replace('ё', 'е')
+        if len(q) < 2:
+            return
+
+        # Автозагрузка подсказок: только если sha1(pass) уже сохранён (чтобы не всплывало окно ввода пароля при наборе текста)
+        if (not self._pricelist_dishes) and bool(self._iiko_pass_sha1_cached):
+            try:
+                self._load_pricelist_dishes()
+            except Exception:
+                pass
+
+        if not self._pricelist_dishes:
+            return
+
+        shown = 0
+        for d in self._pricelist_dishes:
+            name_norm = d.name.lower().replace('ё', 'е')
+            if q in name_norm:
+                item = QListWidgetItem(self._format_dish_line(d))
+                item.setData(Qt.UserRole, d)
+                self.lstDishSuggestions.addItem(item)
+                shown += 1
+                if shown >= 30:
+                    break
+
+    def _add_pricelist_selected(self, d: DishItem):
+        key = self._pl_key(d.name)
+        if not key:
+            return
+        if key in self._pricelist_selected_keys:
+            return
+
+        it = QListWidgetItem(self._format_dish_line(d))
+        it.setData(Qt.UserRole, d)
+        it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+        it.setCheckState(Qt.Checked)
+        self.lstSelectedDishes.addItem(it)
+        self._pricelist_selected_keys.add(key)
+
+    def _on_pricelist_suggestion_clicked(self, item: QListWidgetItem):
+        try:
+            d = item.data(Qt.UserRole)
+            if isinstance(d, DishItem):
+                self._add_pricelist_selected(d)
+        except Exception:
+            pass
+
+    def _add_pricelist_from_enter(self):
+        """Enter в поле поиска: добавляем точное совпадение или первый пункт из подсказок."""
+        try:
+            if not self._pricelist_dishes:
+                QMessageBox.warning(self, "Внимание", "Сначала нажмите 'Загрузить блюда'.")
+                return
+
+            q_raw = (self.edDishSearch.text() or "").strip()
+            if not q_raw:
+                return
+            q = self._pl_key(q_raw)
+
+            # 1) точное совпадение по названию
+            for d in self._pricelist_dishes:
+                if self._pl_key(d.name) == q:
+                    self._add_pricelist_selected(d)
+                    return
+
+            # 2) иначе — первый элемент подсказок
+            if self.lstDishSuggestions.count() > 0:
+                it = self.lstDishSuggestions.item(0)
+                d = it.data(Qt.UserRole)
+                if isinstance(d, DishItem):
+                    self._add_pricelist_selected(d)
+                    return
+
+            QMessageBox.information(self, "Не найдено", "По вашему запросу нет совпадений в загруженном меню.")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _clear_pricelist_selection(self):
+        self.lstSelectedDishes.clear()
+        self._pricelist_selected_keys = set()
+
+    def do_create_pricelist_excel(self):
+        try:
+            # берем только отмеченные галочкой
+            selected: List[DishItem] = []
+            for i in range(self.lstSelectedDishes.count()):
+                it = self.lstSelectedDishes.item(i)
+                if it.checkState() != Qt.Checked:
+                    continue
+                d = it.data(Qt.UserRole)
+                if isinstance(d, DishItem):
+                    selected.append(d)
+
+            if not selected:
+                QMessageBox.warning(self, "Внимание", "Выберите хотя бы одно блюдо (поставьте галочку).")
+                return
+
+            # Предлагаем имя файла
+            desktop = Path.home() / "Desktop"
+            stamp = datetime.now().strftime("%d.%m.%Y")
+            suggested_path = str(desktop / f"ценники_{stamp}.xlsx")
+
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Сохранить ценники",
+                suggested_path,
+                "Excel (*.xlsx);;Все файлы (*.*)",
+            )
+            if not save_path:
+                return
+
+            create_pricelist_xlsx(selected, save_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
 
 
 def main():
