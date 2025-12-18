@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QMimeData, QSize
-from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QBrush, QLinearGradient, QFont
+from PySide6.QtCore import Qt, QMimeData, QSize, QUrl
+from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QBrush, QLinearGradient, QFont, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QBoxLayout,
     QLabel, QPushButton, QFileDialog, QTextEdit, QComboBox, QLineEdit,
@@ -146,6 +146,10 @@ class MainWindow(QMainWindow):
         self.btnMakePresentation.clicked.connect(self.do_make_presentation)
         self.btnBrokerage = QPushButton("Бракеражный журнал")
         self.btnBrokerage.clicked.connect(self.do_brokerage_journal)
+        self.btnOpenMenu = QPushButton("Открыть меню")
+        self.btnOpenMenu.clicked.connect(self.do_open_menu)
+        self.btnDownloadPricelists = QPushButton("Скачать ценники")
+        self.btnDownloadPricelists.clicked.connect(self.do_download_pricelists)
         self.btnShowCompare = QPushButton("Сравнить меню")
         self.btnShowCompare.clicked.connect(self.show_compare_sections)
 
@@ -156,6 +160,8 @@ class MainWindow(QMainWindow):
         self.layTop.addWidget(self.btnDownloadTemplate)
         self.layTop.addWidget(self.btnMakePresentation)
         self.layTop.addWidget(self.btnBrokerage)
+        self.layTop.addWidget(self.btnOpenMenu)
+        self.layTop.addWidget(self.btnDownloadPricelists)
 
         # Apply centralized stylesheet (already set in StyleManager.setup_main_window)
 
@@ -598,6 +604,67 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.edExcelPath.setText(path)
+
+    def do_open_menu(self):
+        """Открывает файл меню (Excel) в приложении по умолчанию (например, Excel)."""
+        try:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Открыть меню",
+                str(Path.cwd()),
+                "Excel (*.xls *.xlsx *.xlsm);;Все файлы (*.*)",
+            )
+            if not path:
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+            if not ok:
+                QMessageBox.warning(self, "Не удалось открыть", "Не удалось открыть файл выбранной программой.")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def do_download_pricelists(self):
+        """Скачивает (копирует) шаблон ценников из папки templates/."""
+        try:
+            # Ищем файл ценников среди шаблонов
+            candidates = [
+                "Ценники.xlsx",
+                "ценники.xlsx",
+                "Шаблон ценников.xlsx",
+                "Шаблон ценников пример.xlsx",
+            ]
+
+            src_path: Optional[str] = None
+            for name in candidates:
+                p = find_template(name)
+                if p and Path(p).exists():
+                    src_path = p
+                    break
+
+            if not src_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Шаблон ценников не найден.\n\n"
+                    "Положите файл 'Ценники.xlsx' (или 'Шаблон ценников.xlsx') в папку templates/.",
+                )
+                return
+
+            desktop = Path.home() / "Desktop"
+            suggested_path = str(desktop / Path(src_path).name)
+
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Сохранить ценники",
+                suggested_path,
+                "Excel (*.xlsx);;Все файлы (*.*)",
+            )
+            if not save_path:
+                return
+
+            shutil.copy(src_path, save_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
     
     def do_create_presentation_with_data(self):
         """Создает презентацию с данными из Excel файла"""
