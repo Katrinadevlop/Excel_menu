@@ -1179,12 +1179,26 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
     def open_birthday_file(self) -> None:
-        """Кнопка "Открыть файл День рождения"."""
-        self._open_document(
-            "docs/birthday",
-            "Открыть файл 'День рождения'",
-            "Excel (*.xls *.xlsx *.xlsm);;Все файлы (*.*)",
-        )
+        """Кнопка "Открыть файл День рождения" — открывает шаблон из templates."""
+        try:
+            template_path = find_template("День рождения.xlsx")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'День рождения.xlsx' не найден. Положите его в папку templates.",
+                )
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
     def download_hygiene_journal(self) -> None:
         """Скачать шаблон гигиенического журнала из папки templates."""
