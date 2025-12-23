@@ -21,9 +21,9 @@ class AppStyles:
     """
     
     # === WINDOW SETTINGS ===
-    WINDOW_DEFAULT_SIZE = (1400, 820)
+    WINDOW_DEFAULT_SIZE = (1600, 900)
     # При повышенном DPI/масштабе Windows (125–150%) маленькое окно визуально «сминает» интерфейс.
-    WINDOW_MIN_SIZE = (1400, 760)
+    WINDOW_MIN_SIZE = (1600, 840)
     WINDOW_ICON_SIZE = 256
     
     # === SPACING AND MARGINS ===
@@ -36,12 +36,19 @@ class AppStyles:
     DEFAULT_FONT_SIZE = 14
     CAPTION_FONT_WEIGHT = True  # Bold
     BUTTON_FONT_SIZE = 14
-    BUTTON_FONT_WEIGHT = 600
-    
+    # Чуть более жирный шрифт для лучшей читаемости кнопок
+    BUTTON_FONT_WEIGHT = 700
+
     # === BORDER RADIUS ===
     DEFAULT_BORDER_RADIUS = 8
     SMALL_BORDER_RADIUS = 6
     TINY_BORDER_RADIUS = 4
+
+    # === BUTTON PADDING ===
+    # Более компактные отступы, чтобы кнопки были поменьше по высоте и ширине
+    DEFAULT_PADDING = "4px 8px"
+    COMPACT_PADDING = "3px 6px"
+    LARGE_PADDING = "8px 16px"
     
     # === COMPONENT HEIGHTS ===
     # Важно: при повышенном DPI (125%/150%) слишком маленькие фиксированные высоты
@@ -116,8 +123,9 @@ class ButtonStyles:
     """
     
     # === BUTTON PADDING ===
-    DEFAULT_PADDING = "6px 12px"
-    COMPACT_PADDING = "4px 8px"
+    # Используем более компактные отступы, чтобы кнопки были поменьше
+    DEFAULT_PADDING = "4px 8px"
+    COMPACT_PADDING = "3px 6px"
     LARGE_PADDING = "8px 16px"
     
     # === BUTTON PRESETS ===

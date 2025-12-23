@@ -6,7 +6,8 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
+from urllib.parse import urlsplit, parse_qsl
 
 from PySide6.QtCore import Qt, QMimeData, QSize, QUrl, QSettings
 from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QBrush, QLinearGradient, QFont, QDesktopServices
@@ -14,7 +15,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QBoxLayout,
     QLabel, QPushButton, QFileDialog, QTextEdit, QComboBox, QLineEdit,
     QGroupBox, QCheckBox, QSpinBox, QRadioButton, QButtonGroup, QMessageBox, QFrame, QSizePolicy, QScrollArea,
-    QListWidget, QListWidgetItem, QInputDialog,
+    QListWidget, QListWidgetItem, QInputDialog, QDialog, QDialogButtonBox,
 )
 
 from app.services.comparator import compare_and_highlight, get_sheet_names, ColumnParseError
@@ -29,6 +30,7 @@ from app.reports.brokerage_journal import create_brokerage_journal_from_menu
 from app.reports.pricelist_excel import create_pricelist_xlsx
 from app.services.dish_extractor import extract_all_dishes_with_details, DishItem
 from app.integrations.iiko_rms_client import IikoRmsClient, IikoApiError
+from app.integrations.iiko_cloud_v1_client import IikoCloudV1Client, IikoOrganization
 from app.services.menu_template_filler import MenuTemplateFiller
 from app.gui.ui_styles import (
     AppStyles, ButtonStyles, LayoutStyles, StyleSheets, ComponentStyles,
@@ -41,6 +43,17 @@ class DropLineEdit(QLineEdit):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setPlaceholderText("Перетащите файл сюда или нажмите Обзор…")
+
+
+class PasteOnDoubleClickLineEdit(QLineEdit):
+    """QLineEdit, который вставляет буфер обмена по двойному клику."""
+
+    def mouseDoubleClickEvent(self, event):
+        try:
+            self.paste()
+        except Exception:
+            pass
+        super().mouseDoubleClickEvent(event)
 
     def dragEnterEvent(self, event):
         md: QMimeData = event.mimeData()
@@ -122,6 +135,125 @@ class FileConfig:
 
 
 class MainWindow(QMainWindow):
+    def _show_access_token_dialog(self, token: str) -> None:
+        """Показывает access_token и даёт кнопку 'Скопировать'."""
+        try:
+            dlg = QDialog(self)
+            dlg.setWindowTitle("iiko — access_token")
+            lay = QVBoxLayout(dlg)
+            lay.addWidget(QLabel("Токен (access_token):"))
+
+            ed = QLineEdit(dlg)
+            ed.setText((token or "").strip())
+            ed.setReadOnly(True)
+            try:
+                ed.setCursorPosition(0)
+                ed.selectAll()
+            except Exception:
+                pass
+            lay.addWidget(ed)
+
+            btns = QHBoxLayout()
+            btn_copy = QPushButton("Скопировать")
+            btn_close = QPushButton("Закрыть")
+
+            def _copy():
+                try:
+                    QApplication.clipboard().setText(ed.text())
+                except Exception:
+                    pass
+
+            btn_copy.clicked.connect(_copy)
+            btn_close.clicked.connect(dlg.accept)
+            btns.addWidget(btn_copy)
+            btns.addStretch(1)
+            btns.addWidget(btn_close)
+            lay.addLayout(btns)
+
+            dlg.exec()
+        except Exception:
+            # если диалог не удалось показать — просто игнорируем
+            pass
+    def _reset_iiko_auth_settings(self) -> None:
+        """Сбрасывает сохранённые данные авторизации iiko (чтобы не подставлялись старые секреты/хэши)."""
+        keys = [
+            # iikoCloud v1
+            "iiko/cloud/api_url",
+            "iiko/cloud/api_login",
+            "iiko/cloud/access_token",
+            "iiko/cloud/org_id",
+            "iiko/cloud/org_name",
+
+            # legacy iiko.biz
+            "iiko/biz/user_secret",
+            "iiko/biz/user_id",
+            "iiko/biz/access_token",
+            "iiko/biz/org_id",
+            "iiko/biz/org_name",
+            "iiko/biz/api_url",
+
+            # REST
+            "iiko/pass_sha1",
+            "iiko/password",
+        ]
+        for k in keys:
+            try:
+                self._settings.remove(k)
+            except Exception:
+                pass
+
+        # сбрасываем кэш-поля в рантайме
+        try:
+            self._iiko_cloud_api_url = "https://api-ru.iiko.services"
+            self._iiko_cloud_api_login = ""
+            self._iiko_cloud_access_token = ""
+            self._iiko_cloud_org_id = ""
+            self._iiko_cloud_org_name = ""
+
+            # legacy iiko.biz
+            self._iiko_biz_user_secret = ""
+            self._iiko_biz_user_id = "pos_login_f13591ea"
+            self._iiko_biz_org_id = ""
+            self._iiko_biz_org_name = ""
+            self._iiko_biz_api_url = "https://iiko.biz:9900"
+            self._iiko_biz_access_token = ""
+            self._iiko_pass_sha1_cached = ""
+        except Exception:
+            pass
+
+        try:
+            self._iiko_products_by_key = {}
+            self._pricelist_dishes = []
+        except Exception:
+            pass
+
+    def _prompt_text(self, title: str, label: str, echo_mode=QLineEdit.Normal, default_text: str = "") -> Optional[str]:
+        """Диалог ввода текста, где двойной клик в поле вставляет буфер обмена."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(label))
+
+        ed = PasteOnDoubleClickLineEdit(dlg)
+        ed.setEchoMode(echo_mode)
+        if default_text:
+            ed.setText(default_text)
+            try:
+                ed.selectAll()
+            except Exception:
+                pass
+        lay.addWidget(ed)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+
+        ed.setFocus()
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        return (ed.text() or "").strip()
+
     def __init__(self):
         super().__init__()
         # Локальные настройки (Windows Registry) для запоминания параметров iiko
@@ -154,8 +286,15 @@ class MainWindow(QMainWindow):
         self.btnMakePresentation.clicked.connect(self.do_make_presentation)
         self.btnBrokerage = QPushButton("Бракеражный журнал")
         self.btnBrokerage.clicked.connect(self.do_brokerage_journal)
-        self.btnOpenMenu = QPushButton("Открыть меню")
-        self.btnOpenMenu.clicked.connect(self.do_open_menu)
+        self.btnOpenMenu = QPushButton("Авторизация точки")
+        self.btnOpenMenu.clicked.connect(self.do_authorize_point)
+
+        self.btnOpenTomorrowDishes = QPushButton("Открыть блюда")
+        self.btnOpenTomorrowDishes.clicked.connect(self.do_open_tomorrow_dishes)
+
+        self.btnDocuments = QPushButton("Документы")
+        self.btnDocuments.clicked.connect(self.show_documents_tab)
+
         self.btnDownloadPricelists = QPushButton("Скачать ценники")
         self.btnDownloadPricelists.clicked.connect(self.do_download_pricelists)
         self.btnShowCompare = QPushButton("Сравнить меню")
@@ -169,6 +308,8 @@ class MainWindow(QMainWindow):
         self.layTop.addWidget(self.btnMakePresentation)
         self.layTop.addWidget(self.btnBrokerage)
         self.layTop.addWidget(self.btnOpenMenu)
+        self.layTop.addWidget(self.btnOpenTomorrowDishes)
+        self.layTop.addWidget(self.btnDocuments)
         self.layTop.addWidget(self.btnDownloadPricelists)
 
         # Apply centralized stylesheet (already set in StyleManager.setup_main_window)
@@ -329,12 +470,29 @@ class MainWindow(QMainWindow):
         self._pricelist_dishes: List[DishItem] = []
         self._pricelist_selected_keys: set[str] = set()
 
-        # Источник блюд: только iiko (без экселя и без UI-настроек подключения)
+        # Источник блюд: iiko (REST / iikoCloud)
+        self._iiko_mode = str(self._settings.value("iiko/mode", "cloud"))  # cloud | rest
+
+        # REST (resto)
         self._iiko_base_url = str(self._settings.value("iiko/base_url", "https://287-772-687.iiko.it/resto"))
         self._iiko_login = str(self._settings.value("iiko/login", "user"))
-
         # Храним только sha1-хэш пароля (как требует iikoRMS resto API).
         self._iiko_pass_sha1_cached = str(self._settings.value("iiko/pass_sha1", ""))
+
+        # iikoCloud v1 (api-ru.iiko.services): apiLogin -> access_token
+        self._iiko_cloud_api_url = str(self._settings.value("iiko/cloud/api_url", "https://api-ru.iiko.services"))
+        self._iiko_cloud_api_login = str(self._settings.value("iiko/cloud/api_login", ""))
+        self._iiko_cloud_access_token = str(self._settings.value("iiko/cloud/access_token", ""))
+        self._iiko_cloud_org_id = str(self._settings.value("iiko/cloud/org_id", ""))
+        self._iiko_cloud_org_name = str(self._settings.value("iiko/cloud/org_name", ""))
+
+        # legacy iiko.biz (оставлено на случай старых настроек)
+        self._iiko_biz_api_url = str(self._settings.value("iiko/biz/api_url", "https://iiko.biz:9900"))
+        self._iiko_biz_user_id = str(self._settings.value("iiko/biz/user_id", "pos_login_f13591ea"))
+        self._iiko_biz_user_secret = str(self._settings.value("iiko/biz/user_secret", ""))
+        self._iiko_biz_access_token = str(self._settings.value("iiko/biz/access_token", ""))
+        self._iiko_biz_org_id = str(self._settings.value("iiko/biz/org_id", ""))
+        self._iiko_biz_org_name = str(self._settings.value("iiko/biz/org_name", ""))
 
         # Миграция со старой версии: если вдруг сохранён plaintext-пароль — конвертируем и удаляем.
         try:
@@ -397,6 +555,66 @@ class MainWindow(QMainWindow):
         self.contentLayout.addWidget(self.grpPricelist)
         self.grpPricelist.setVisible(False)
 
+        # ===== ОТКРЫТИЕ БЛЮД НА ЗАВТРА (из Excel -> снять со стоп-листа в iiko) =====
+        self._tomorrow_menu_dishes: List[DishItem] = []
+        self._iiko_products_by_key: dict[str, str] = {}
+        self._suppress_tomorrow_item_changed = False
+
+        self.lblTomorrowInfo = QLabel(
+            "1) Выберите Excel меню на завтра  2) Нажмите 'Загрузить из Excel'  3) Поставьте галочку — блюдо откроется (снимем со стоп-листа)"
+        )
+
+        self.btnLoadTomorrowFromExcel = QPushButton("Загрузить из Excel")
+        self.btnLoadTomorrowFromExcel.clicked.connect(self._load_tomorrow_dishes_from_excel)
+
+        self.edTomorrowSearch = QLineEdit()
+        self.edTomorrowSearch.setPlaceholderText("Поиск по списку…")
+        self.edTomorrowSearch.textChanged.connect(self._filter_tomorrow_dishes)
+
+        self.lstTomorrowDishes = QListWidget()
+        self.lstTomorrowDishes.setMinimumHeight(320)
+        self.lstTomorrowDishes.itemChanged.connect(self._on_tomorrow_item_changed)
+
+        tomorrow_box = QWidget(); tomorrow_layout = QVBoxLayout(tomorrow_box)
+        tomorrow_layout.addWidget(self.lblTomorrowInfo)
+        tomorrow_layout.addWidget(self.btnLoadTomorrowFromExcel)
+        tomorrow_layout.addWidget(self.edTomorrowSearch)
+        tomorrow_layout.addWidget(label_caption("Блюда на завтра (галочка = открыть)"))
+        tomorrow_layout.addWidget(self.lstTomorrowDishes)
+
+        self.grpTomorrowOpen = nice_group("Открыть блюда на завтра (iiko стоп-лист)", tomorrow_box)
+        self.contentLayout.addWidget(self.grpTomorrowOpen)
+        self.grpTomorrowOpen.setVisible(False)
+
+        # ===== ДОКУМЕНТЫ: быстрый доступ к файлам =====
+        docs_box = QWidget(); docs_layout = QVBoxLayout(docs_box)
+        docs_layout.setSpacing(AppStyles.CONTENT_SPACING)
+
+        self.btnVacationStatement = QPushButton("Заявление на отпуск")
+        self.btnVacationStatement.clicked.connect(self.open_vacation_statement)
+        StyleManager.style_action_button(self.btnVacationStatement)
+
+        self.btnMedicalBooks = QPushButton("Открыть медкнижки (Excel)")
+        self.btnMedicalBooks.clicked.connect(self.open_med_books)
+        StyleManager.style_action_button(self.btnMedicalBooks)
+
+        self.btnBirthdayFile = QPushButton("Открыть файл \"День рождения\"")
+        self.btnBirthdayFile.clicked.connect(self.open_birthday_file)
+        StyleManager.style_action_button(self.btnBirthdayFile)
+
+        self.btnHygieneJournal = QPushButton("Скачать гигиенический журнал")
+        self.btnHygieneJournal.clicked.connect(self.download_hygiene_journal)
+        StyleManager.style_action_button(self.btnHygieneJournal)
+
+        docs_layout.addWidget(self.btnVacationStatement)
+        docs_layout.addWidget(self.btnMedicalBooks)
+        docs_layout.addWidget(self.btnBirthdayFile)
+        docs_layout.addWidget(self.btnHygieneJournal)
+        docs_layout.addStretch(1)
+
+        self.grpDocuments = nice_group("Документы", docs_box)
+        self.contentLayout.addWidget(self.grpDocuments)
+        self.grpDocuments.setVisible(False)
 
         # Панель действий внизу для ценников (фиксированная)
         self.pricelistActionsPanel = QWidget(); self.pricelistActionsPanel.setObjectName("actionsPanel")
@@ -408,6 +626,17 @@ class MainWindow(QMainWindow):
         self.pricelistActionsLayout.addWidget(self.btnCreatePricelist)
         self.rootLayout.addWidget(self.pricelistActionsPanel)
         self.pricelistActionsPanel.setVisible(False)
+
+        # Панель действий внизу для "Открыть блюда" (фиксированная)
+        self.tomorrowOpenActionsPanel = QWidget(); self.tomorrowOpenActionsPanel.setObjectName("actionsPanel")
+        self.tomorrowOpenActionsLayout = QHBoxLayout(self.tomorrowOpenActionsPanel)
+        LayoutStyles.apply_margins(self.tomorrowOpenActionsLayout, LayoutStyles.CONTENT_TOP_MARGIN)
+        self.btnOpenTomorrowChecked = QPushButton("Открыть отмеченные")
+        self.btnOpenTomorrowChecked.clicked.connect(self._open_tomorrow_checked)
+        self.tomorrowOpenActionsLayout.addStretch(1)
+        self.tomorrowOpenActionsLayout.addWidget(self.btnOpenTomorrowChecked)
+        self.rootLayout.addWidget(self.tomorrowOpenActionsPanel)
+        self.tomorrowOpenActionsPanel.setVisible(False)
 
         # Добавляем нижний растягивающий элемент, чтобы контент не растягивался равномерно, а был прижат кверху
         self.contentLayout.addStretch(1)
@@ -602,6 +831,12 @@ class MainWindow(QMainWindow):
                 self.grpPricelist.setVisible(False)
             if hasattr(self, "pricelistActionsPanel"):
                 self.pricelistActionsPanel.setVisible(False)
+            if hasattr(self, "grpTomorrowOpen"):
+                self.grpTomorrowOpen.setVisible(False)
+            if hasattr(self, "tomorrowOpenActionsPanel"):
+                self.tomorrowOpenActionsPanel.setVisible(False)
+            if hasattr(self, "grpDocuments"):
+                self.grpDocuments.setVisible(False)
 
             # Показать формы сравнения и панель действий
             if hasattr(self, "grpFirst"):
@@ -613,6 +848,43 @@ class MainWindow(QMainWindow):
                 self.paramsBox.setChecked(False)
             if hasattr(self, "actionsPanel"):
                 self.actionsPanel.setVisible(True)
+        except Exception:
+            pass
+
+    def show_documents_tab(self) -> None:
+        """Показывает вкладку "Документы" с кнопками для открытия файлов."""
+        try:
+            # Скрываем другие панели
+            if hasattr(self, "grpFirst"):
+                self.grpFirst.setVisible(False)
+            if hasattr(self, "grpSecond"):
+                self.grpSecond.setVisible(False)
+            if hasattr(self, "paramsBox"):
+                self.paramsBox.setVisible(False)
+            if hasattr(self, "actionsPanel"):
+                self.actionsPanel.setVisible(False)
+            if hasattr(self, "grpExcelFile"):
+                self.grpExcelFile.setVisible(False)
+            if hasattr(self, "presentationActionsPanel"):
+                self.presentationActionsPanel.setVisible(False)
+            if hasattr(self, "brokerageActionsPanel"):
+                self.brokerageActionsPanel.setVisible(False)
+            if hasattr(self, "templateActionsPanel"):
+                self.templateActionsPanel.setVisible(False)
+            if hasattr(self, "grpPricelist"):
+                self.grpPricelist.setVisible(False)
+            if hasattr(self, "pricelistActionsPanel"):
+                self.pricelistActionsPanel.setVisible(False)
+            if hasattr(self, "grpTomorrowOpen"):
+                self.grpTomorrowOpen.setVisible(False)
+            if hasattr(self, "tomorrowOpenActionsPanel"):
+                self.tomorrowOpenActionsPanel.setVisible(False)
+
+            # Показываем блок с документами
+            if hasattr(self, "grpDocuments"):
+                self.grpDocuments.setVisible(True)
+                if hasattr(self, "scrollArea"):
+                    self.scrollArea.ensureWidgetVisible(self.grpDocuments)
         except Exception:
             pass
 
@@ -645,6 +917,12 @@ class MainWindow(QMainWindow):
                 self.grpPricelist.setVisible(False)
             if hasattr(self, "pricelistActionsPanel"):
                 self.pricelistActionsPanel.setVisible(False)
+            if hasattr(self, "grpTomorrowOpen"):
+                self.grpTomorrowOpen.setVisible(False)
+            if hasattr(self, "tomorrowOpenActionsPanel"):
+                self.tomorrowOpenActionsPanel.setVisible(False)
+            if hasattr(self, "grpDocuments"):
+                self.grpDocuments.setVisible(False)
             
             # Показываем панель для работы с шаблоном меню и её панель действий
             if hasattr(self, "grpExcelFile"):
@@ -677,6 +955,12 @@ class MainWindow(QMainWindow):
                 self.grpPricelist.setVisible(False)
             if hasattr(self, "pricelistActionsPanel"):
                 self.pricelistActionsPanel.setVisible(False)
+            if hasattr(self, "grpTomorrowOpen"):
+                self.grpTomorrowOpen.setVisible(False)
+            if hasattr(self, "tomorrowOpenActionsPanel"):
+                self.tomorrowOpenActionsPanel.setVisible(False)
+            if hasattr(self, "grpDocuments"):
+                self.grpDocuments.setVisible(False)
             
             # Показываем панель для работы с презентациями и её панель действий
             if hasattr(self, "grpExcelFile"):
@@ -700,6 +984,105 @@ class MainWindow(QMainWindow):
         if path:
             self.edExcelPath.setText(path)
 
+    def do_authorize_point(self):
+        """Авторизация iikoCloud API v1 (api-ru.iiko.services) через apiLogin."""
+        try:
+            # Явно предлагаем "Сбросить" перед вводом, чтобы точно убрать старые данные.
+            msg = QMessageBox(self)
+            msg.setWindowTitle("iiko")
+            msg.setText("Перед авторизацией:")
+            msg.setInformativeText("Можно сбросить сохранённый логин/пароль/токен, чтобы приложение не использовало старые данные.")
+            btn_reset = msg.addButton("Сбросить", QMessageBox.DestructiveRole)
+            btn_continue = msg.addButton("Продолжить", QMessageBox.AcceptRole)
+            msg.addButton("Отмена", QMessageBox.RejectRole)
+            msg.exec()
+
+            clicked = msg.clickedButton()
+            if clicked is None:
+                return
+            if clicked == btn_reset:
+                self._reset_iiko_auth_settings()
+            elif clicked != btn_continue:
+                return
+
+            api_url = (self._iiko_cloud_api_url or "").strip() or "https://api-ru.iiko.services"
+
+            api_login_default = (self._iiko_cloud_api_login or "").strip()
+            api_login = self._prompt_text(
+                "iiko — iikoCloud",
+                "apiLogin\r\n(двойной клик в поле = вставить из буфера обмена):",
+                QLineEdit.Normal,
+                default_text=api_login_default,
+            )
+            if not api_login:
+                return
+
+            client = IikoCloudV1Client(api_url=api_url, api_login=api_login)
+            access_token = client.access_token()
+
+            # показываем токен (можно скопировать)
+            self._show_access_token_dialog(access_token)
+
+            # Организации
+            orgs = client.organizations()
+            org_id = ""
+            org_name = ""
+
+            if len(orgs) == 1:
+                org_id = orgs[0].id
+                org_name = orgs[0].name
+            else:
+                labels = [f"{i+1}. {o.name} ({o.id})" for i, o in enumerate(orgs)]
+                chosen, ok = QInputDialog.getItem(
+                    self,
+                    "iiko — iikoCloud",
+                    "Выберите организацию:",
+                    labels,
+                    0,
+                    False,
+                )
+                if not ok:
+                    return
+                idx = labels.index(chosen)
+                org_id = orgs[idx].id
+                org_name = orgs[idx].name
+
+            QMessageBox.information(self, "iiko", f"Подключено к организации: {org_name}")
+
+            self._iiko_mode = "cloud"
+            self._iiko_cloud_api_url = api_url
+            self._iiko_cloud_api_login = api_login
+            self._iiko_cloud_access_token = access_token
+            self._iiko_cloud_org_id = org_id
+            self._iiko_cloud_org_name = org_name
+
+            # Важно: если меняли пароль — сбросим сохранённые кэши номенклатуры.
+
+            self._iiko_products_by_key = {}
+            self._pricelist_dishes = []
+
+            try:
+                self._settings.setValue("iiko/mode", "cloud")
+                self._settings.setValue("iiko/cloud/api_url", api_url)
+                self._settings.setValue("iiko/cloud/api_login", api_login)
+                self._settings.setValue("iiko/cloud/access_token", access_token)
+                self._settings.setValue("iiko/cloud/org_id", org_id)
+                if org_name:
+                    self._settings.setValue("iiko/cloud/org_name", org_name)
+            except Exception:
+                pass
+
+            # Покажем, куда подключились
+            if org_name:
+                QMessageBox.information(self, "iiko", f"iiko.biz подключено: {org_name} ({org_id})")
+            else:
+                QMessageBox.information(self, "iiko", f"iiko.biz подключено. organization_id: {org_id}")
+
+        except IikoApiError as e:
+            QMessageBox.critical(self, "iiko", str(e))
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
     def do_open_menu(self):
         """Открывает файл меню (Excel) в приложении по умолчанию (например, Excel)."""
         try:
@@ -715,6 +1098,166 @@ class MainWindow(QMainWindow):
             ok = QDesktopServices.openUrl(QUrl.fromLocalFile(path))
             if not ok:
                 QMessageBox.warning(self, "Не удалось открыть", "Не удалось открыть файл выбранной программой.")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _open_document(self, settings_key: str, dialog_title: str, file_filter: str) -> None:
+        """Открывает произвольный файл документа, запоминая его путь в настройках."""
+        try:
+            path = ""
+            try:
+                if hasattr(self, "_settings"):
+                    value = self._settings.value(settings_key, "")
+                    path = str(value) if value is not None else ""
+            except Exception:
+                path = ""
+
+            if not path or not Path(path).exists():
+                path, _ = QFileDialog.getOpenFileName(
+                    self,
+                    dialog_title,
+                    str(Path.cwd()),
+                    file_filter,
+                )
+                if not path:
+                    return
+                try:
+                    if hasattr(self, "_settings"):
+                        self._settings.setValue(settings_key, path)
+                except Exception:
+                    pass
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+            if not ok:
+                QMessageBox.warning(self, "Не удалось открыть", "Не удалось открыть файл выбранной программой.")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def open_vacation_statement(self) -> None:
+        """Кнопка "Заявление на отпуск" — просто открывает шаблон в Word, без копирования на рабочий стол."""
+        try:
+            template_path = find_template("Заявление на отпуск.doc")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Заявление на отпуск.doc' не найден. Положите его в папку templates.",
+                )
+                return
+
+            # Сразу открываем шаблон в приложении по умолчанию (обычно Word)
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_med_books(self) -> None:
+        """Кнопка "Открыть медкнижки" — открывает шаблон Медкнижки.xlsx из templates."""
+        try:
+            template_path = find_template("Медкнижки.xlsx")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Медкнижки.xlsx' не найден. Положите его в папку templates.",
+                )
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_birthday_file(self) -> None:
+        """Кнопка "Открыть файл День рождения"."""
+        self._open_document(
+            "docs/birthday",
+            "Открыть файл 'День рождения'",
+            "Excel (*.xls *.xlsx *.xlsm);;Все файлы (*.*)",
+        )
+
+    def download_hygiene_journal(self) -> None:
+        """Скачать шаблон гигиенического журнала из папки templates."""
+        try:
+            template_path = find_template("Гигиенический журнал.xlsx")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Гигиенический журнал.xlsx' не найден. Положите его в папку templates.",
+                )
+                return
+
+            desktop = Path.home() / "Desktop"
+            suggested_path = str(desktop / "Гигиенический журнал.xlsx")
+
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Скачать гигиенический журнал",
+                suggested_path,
+                "Excel (*.xlsx);;Excel (*.xls);;Все файлы (*.*)",
+            )
+            if not save_path:
+                return
+
+            shutil.copyfile(template_path, save_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def do_open_tomorrow_dishes(self):
+        """Открытие блюд на завтра: берём Excel-меню и снимаем блюда со стоп-листа в iiko."""
+        try:
+            # Скрываем другие панели
+            if hasattr(self, "grpFirst"):
+                self.grpFirst.setVisible(False)
+            if hasattr(self, "grpSecond"):
+                self.grpSecond.setVisible(False)
+            if hasattr(self, "paramsBox"):
+                self.paramsBox.setVisible(False)
+            if hasattr(self, "actionsPanel"):
+                self.actionsPanel.setVisible(False)
+            if hasattr(self, "presentationActionsPanel"):
+                self.presentationActionsPanel.setVisible(False)
+            if hasattr(self, "brokerageActionsPanel"):
+                self.brokerageActionsPanel.setVisible(False)
+            if hasattr(self, "templateActionsPanel"):
+                self.templateActionsPanel.setVisible(False)
+            if hasattr(self, "grpPricelist"):
+                self.grpPricelist.setVisible(False)
+            if hasattr(self, "pricelistActionsPanel"):
+                self.pricelistActionsPanel.setVisible(False)
+            if hasattr(self, "grpDocuments"):
+                self.grpDocuments.setVisible(False)
+
+            # Показываем выбор Excel-файла меню на завтра
+            if hasattr(self, "grpExcelFile"):
+                self.grpExcelFile.setVisible(True)
+                self.grpExcelFile.setTitle("Excel меню на завтра")
+                self.edExcelPath.setPlaceholderText("Выберите Excel файл меню на завтра (тот же формат, что и для презентации/журнала)…")
+
+            if hasattr(self, "grpTomorrowOpen"):
+                self.grpTomorrowOpen.setVisible(True)
+            if hasattr(self, "tomorrowOpenActionsPanel"):
+                self.tomorrowOpenActionsPanel.setVisible(True)
+
+            # Сброс состояния
+            self._tomorrow_menu_dishes = []
+            self.edTomorrowSearch.clear()
+            self.lstTomorrowDishes.clear()
+            self.lblTomorrowInfo.setText(
+                "1) Выберите Excel меню на завтра  2) Нажмите 'Загрузить из Excel'  3) Поставьте галочку — блюдо откроется (снимем со стоп-листа)"
+            )
+
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
@@ -736,10 +1279,18 @@ class MainWindow(QMainWindow):
                 self.brokerageActionsPanel.setVisible(False)
             if hasattr(self, "templateActionsPanel"):
                 self.templateActionsPanel.setVisible(False)
+            if hasattr(self, "grpDocuments"):
+                self.grpDocuments.setVisible(False)
 
             # Для ценников НЕ показываем общий блок выбора Excel-файла (он мешает и не нужен при iiko)
             if hasattr(self, "grpExcelFile"):
                 self.grpExcelFile.setVisible(False)
+
+            # Скрываем "Открыть блюда" если было открыто
+            if hasattr(self, "grpTomorrowOpen"):
+                self.grpTomorrowOpen.setVisible(False)
+            if hasattr(self, "tomorrowOpenActionsPanel"):
+                self.tomorrowOpenActionsPanel.setVisible(False)
 
             # Показываем панель ценников
             if hasattr(self, "grpPricelist"):
@@ -761,10 +1312,9 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-            # Автозагрузка блюд из iiko: только если пароль уже сохранён.
-            # Иначе пользователь нажмёт кнопку «Загрузить блюда» и введёт пароль один раз.
+            # Автозагрузка блюд из iiko: если авторизация точки уже сделана
             try:
-                if (not self._pricelist_dishes) and bool(self._iiko_pass_sha1_cached):
+                if (not self._pricelist_dishes) and self._can_autoload_iiko_products():
                     self._load_pricelist_dishes()
             except Exception:
                 pass
@@ -843,6 +1393,12 @@ class MainWindow(QMainWindow):
                 self.grpPricelist.setVisible(False)
             if hasattr(self, "pricelistActionsPanel"):
                 self.pricelistActionsPanel.setVisible(False)
+            if hasattr(self, "grpTomorrowOpen"):
+                self.grpTomorrowOpen.setVisible(False)
+            if hasattr(self, "tomorrowOpenActionsPanel"):
+                self.tomorrowOpenActionsPanel.setVisible(False)
+            if hasattr(self, "grpDocuments"):
+                self.grpDocuments.setVisible(False)
             
             # Показываем панель для работы с бракеражным журналом и её панель действий
             if hasattr(self, "grpExcelFile"):
@@ -990,22 +1546,17 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
-    # ===== ЦЕННИКИ: логика =====
+    # ===== iiko: общие хелперы =====
     def _ensure_iiko_pass_sha1(self) -> bool:
         """Если sha1(pass) не сохранён — спрашиваем пароль один раз и сохраняем только sha1."""
         if self._iiko_pass_sha1_cached:
             return True
 
-        pwd, ok = QInputDialog.getText(
-            self,
+        pwd = self._prompt_text(
             "iiko",
-            "Введите пароль iiko (сохранится только SHA1-хэш на этом компьютере):",
+            "Введите пароль iiko (сохранится только SHA1-хэш на этом компьютере)\n(двойной клик в поле = вставить из буфера обмена):",
             QLineEdit.Password,
         )
-        if not ok:
-            return False
-
-        pwd = (pwd or "").strip()
         if not pwd:
             return False
 
@@ -1019,8 +1570,265 @@ class MainWindow(QMainWindow):
 
         return True
 
+    def _can_autoload_iiko_products(self) -> bool:
+        """Есть ли сохранённые данные, чтобы на вкладках не просить ввод заново."""
+        mode = (self._iiko_mode or "cloud").strip().lower()
+        if mode == "cloud":
+            return bool(
+                (self._iiko_cloud_api_login or "").strip()
+                and (self._iiko_cloud_org_id or "").strip()
+            )
+        return bool(
+            (self._iiko_base_url or "").strip()
+            and (self._iiko_login or "").strip()
+            and (self._iiko_pass_sha1_cached or "").strip()
+        )
+
+    def _get_iiko_products(self) -> List[Any]:
+        """Возвращает список продуктов iiko в зависимости от выбранного режима (REST/Cloud).
+
+        Для iikoCloud теперь работаем ТОЛЬКО с уже сохранённым access_token:
+        - не ходим повторно на /api/1/access_token;
+        - если токена нет — просим нажать «Авторизация точки»;
+        - если токен перестал работать (401/403 и т.п.) — показываем ошибку, без автопереавторизации.
+        """
+        mode = (self._iiko_mode or "cloud").strip().lower()
+
+        if mode == "cloud":
+            api_url = (self._iiko_cloud_api_url or "").strip() or "https://api-ru.iiko.services"
+            api_login = (self._iiko_cloud_api_login or "").strip()
+            org_id = (self._iiko_cloud_org_id or "").strip()
+
+            if not org_id:
+                raise IikoApiError("Не выбрана организация. Нажмите 'Авторизация точки'.")
+
+            token = (self._iiko_cloud_access_token or "").strip()
+            if not token:
+                raise IikoApiError(
+                    "Не найден access_token iikoCloud. Сначала нажмите 'Авторизация точки'."
+                )
+
+            client = IikoCloudV1Client(
+                api_url=api_url,
+                api_login=api_login,
+                organization_id=org_id,
+                access_token=token,
+            )
+            # Если токен протух — просто покажем ошибку пользователю.
+            return client.get_products()
+
+        # REST
+        if not self._ensure_iiko_pass_sha1():
+            raise IikoApiError("Не задан SHA1-хэш пароля для REST. Нажмите 'Авторизация точки'.")
+
+        base_url = (self._iiko_base_url or "").strip()
+        login = (self._iiko_login or "").strip()
+        pass_sha1 = (self._iiko_pass_sha1_cached or "").strip()
+        if not base_url or not login or not pass_sha1:
+            raise IikoApiError("Не заданы параметры подключения iiko.")
+
+        client = IikoRmsClient(base_url=base_url, login=login, pass_sha1=pass_sha1)
+        return client.get_products()
+
+    def _ensure_iiko_products_index(self) -> bool:
+        """Подгружает номенклатуру iiko и строит индекс name->productId (для сопоставления с Excel)."""
+        if self._iiko_products_by_key:
+            return True
+
+        products = self._get_iiko_products()
+
+        idx: dict[str, str] = {}
+        for p in products:
+            key = self._pl_key(getattr(p, 'name', ''))
+            if not key:
+                continue
+            pid = (getattr(p, 'product_id', '') or "").strip()
+            if not pid:
+                continue
+            idx.setdefault(key, pid)
+
+        self._iiko_products_by_key = idx
+        return True
+
     def _pl_key(self, name: str) -> str:
         return " ".join(str(name).strip().lower().replace('ё', 'е').split())
+
+    # ===== Открытие блюд на завтра (Excel -> iiko stoplist) =====
+    def _load_tomorrow_dishes_from_excel(self):
+        try:
+            excel_path = self.edExcelPath.text().strip()
+            if not excel_path:
+                QMessageBox.warning(self, "Внимание", "Выберите Excel файл меню на завтра.")
+                return
+            if not Path(excel_path).exists():
+                QMessageBox.warning(self, "Ошибка", "Указанный Excel файл не найден.")
+                return
+
+            # 1) Забираем блюда из Excel
+            dishes = extract_all_dishes_with_details(excel_path)
+            if not dishes:
+                QMessageBox.warning(self, "Не найдено", "В Excel не удалось найти блюда (проверьте формат меню).")
+                return
+
+            self._tomorrow_menu_dishes = dishes
+
+            # 2) Готовим индекс iiko, чтобы сопоставить имена -> productId
+            if not self._ensure_iiko_products_index():
+                return
+
+            self._populate_tomorrow_dish_list()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _populate_tomorrow_dish_list(self):
+        self._suppress_tomorrow_item_changed = True
+        try:
+            self.lstTomorrowDishes.clear()
+
+            not_found = 0
+            for d in self._tomorrow_menu_dishes:
+                name = (d.name or "").strip()
+                if not name:
+                    continue
+
+                key = self._pl_key(name)
+                pid = self._iiko_products_by_key.get(key, "")
+
+                it = QListWidgetItem(name)
+                it.setData(Qt.UserRole, pid)
+                it.setData(Qt.UserRole + 1, "ready" if pid else "not_found")
+                it.setData(Qt.UserRole + 2, name)
+
+                if pid:
+                    it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+                    it.setCheckState(Qt.Unchecked)
+                else:
+                    not_found += 1
+                    # не даём поставить галочку
+                    it.setFlags(it.flags() & ~Qt.ItemIsUserCheckable)
+                    it.setForeground(QBrush(QColor("#888888")))
+                    it.setText(f"{name}  (не найдено в iiko)")
+
+                self.lstTomorrowDishes.addItem(it)
+
+            total = self.lstTomorrowDishes.count()
+            self.lblTomorrowInfo.setText(
+                f"Загружено из Excel: {total}. Не найдено в iiko: {not_found}. "
+                "Поставьте галочку у найденных — блюдо откроется (снимем со стоп-листа)."
+            )
+
+        finally:
+            self._suppress_tomorrow_item_changed = False
+
+    def _filter_tomorrow_dishes(self, text: str):
+        q = self._pl_key(text)
+        for i in range(self.lstTomorrowDishes.count()):
+            it = self.lstTomorrowDishes.item(i)
+            base_name = (it.data(Qt.UserRole + 2) or it.text() or "")
+            show = (not q) or (q in self._pl_key(base_name))
+            it.setHidden(not show)
+
+    def _open_one_tomorrow_item(self, it: QListWidgetItem) -> bool:
+        """Снять со стоп-листа.
+
+        Сейчас в проекте оставлен один способ авторизации (iiko.biz по ссылке).
+        Снятие со стоп-листа в этом приложении ранее делалось через /resto, но на вашей стороне
+        REST часто блокируется лицензией (REST_API(2000)).
+
+        Поэтому здесь пока показываем понятную ошибку, чтобы приложение не просило пароль REST.
+        """
+        pid = (it.data(Qt.UserRole) or "").strip()
+        if not pid:
+            return False
+
+        raise IikoApiError(
+            "Открытие блюда (снятие со стоп-листа) сейчас не настроено через iiko.biz. "
+            "Нужно либо включить REST (/resto) на сервере, либо реализовать 'приказы' через iikoChain." 
+        )
+
+    def _on_tomorrow_item_changed(self, item: QListWidgetItem):
+        if self._suppress_tomorrow_item_changed:
+            return
+
+        try:
+            status = item.data(Qt.UserRole + 1)
+            if status == "not_found":
+                return
+
+            if item.checkState() != Qt.Checked:
+                return
+
+            # Поставили галочку -> пробуем "открыть" (снять со стоп-листа)
+            self._suppress_tomorrow_item_changed = True
+            try:
+                item.setData(Qt.UserRole + 1, "opening")
+                base_name = (item.data(Qt.UserRole + 2) or item.text() or "")
+                item.setText(f"{base_name}  (открываю…)")
+            finally:
+                self._suppress_tomorrow_item_changed = False
+
+            try:
+                self._open_one_tomorrow_item(item)
+                self._suppress_tomorrow_item_changed = True
+                try:
+                    base_name = (item.data(Qt.UserRole + 2) or item.text() or "")
+                    item.setData(Qt.UserRole + 1, "opened")
+                    item.setForeground(QBrush(QColor("#2e7d32")))
+                    item.setText(f"{base_name}  (ОТКРЫТО)")
+                    item.setCheckState(Qt.Checked)
+                finally:
+                    self._suppress_tomorrow_item_changed = False
+
+            except IikoApiError as e:
+                self._suppress_tomorrow_item_changed = True
+                try:
+                    base_name = (item.data(Qt.UserRole + 2) or item.text() or "")
+                    item.setData(Qt.UserRole + 1, "failed")
+                    item.setForeground(QBrush(QColor("#b71c1c")))
+                    item.setText(f"{base_name}  (ошибка открытия)")
+                    item.setCheckState(Qt.Unchecked)
+                finally:
+                    self._suppress_tomorrow_item_changed = False
+
+                QMessageBox.critical(self, "iiko", str(e))
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _open_tomorrow_checked(self):
+        try:
+            any_done = False
+            for i in range(self.lstTomorrowDishes.count()):
+                it = self.lstTomorrowDishes.item(i)
+                if it.isHidden():
+                    continue
+                if it.checkState() != Qt.Checked:
+                    continue
+                if it.data(Qt.UserRole + 1) == "opened":
+                    continue
+                try:
+                    self._open_one_tomorrow_item(it)
+                    it.setData(Qt.UserRole + 1, "opened")
+                    it.setForeground(QBrush(QColor("#2e7d32")))
+                    base_name = (it.data(Qt.UserRole + 2) or it.text() or "")
+                    it.setText(f"{base_name}  (ОТКРЫТО)")
+                    any_done = True
+                except IikoApiError as e:
+                    it.setData(Qt.UserRole + 1, "failed")
+                    it.setForeground(QBrush(QColor("#b71c1c")))
+                    base_name = (it.data(Qt.UserRole + 2) or it.text() or "")
+                    it.setText(f"{base_name}  (ошибка открытия)")
+                    QMessageBox.critical(self, "iiko", str(e))
+                    return
+
+            if any_done:
+                QMessageBox.information(self, "Готово", "Открытие отмеченных блюд завершено.")
+            else:
+                QMessageBox.information(self, "Нет выбора", "Отметьте блюда галочками, которые нужно открыть.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
 
     def _format_dish_line(self, d: DishItem) -> str:
         parts = [d.name]
@@ -1032,37 +1840,14 @@ class MainWindow(QMainWindow):
 
     def _load_pricelist_dishes(self):
         try:
-            if not self._ensure_iiko_pass_sha1():
-                return
-
-            base_url = (self._iiko_base_url or "").strip()
-            login = (self._iiko_login or "").strip()
-            pass_sha1 = (self._iiko_pass_sha1_cached or "").strip()
-
-            if not base_url or not login or not pass_sha1:
-                QMessageBox.warning(self, "Внимание", "Не заданы параметры подключения iiko.")
-                return
-
-            client = IikoRmsClient(base_url=base_url, login=login, pass_sha1=pass_sha1)
-            products = client.get_products()
+            products = self._get_iiko_products()
 
             dishes = [DishItem(name=p.name, weight=p.weight, price=p.price) for p in products]
             self._pricelist_dishes = dishes
             self.lblPricelistInfo.setText(f"Загружено из iiko: {len(dishes)}")
             self._update_pricelist_suggestions(self.edDishSearch.text())
         except IikoApiError as e:
-            msg = str(e)
-            # Если пароль неверный/просрочен — сбросим сохранённый и попросим ввести заново
-            if ("401" in msg) or ("Unauthorized" in msg):
-                try:
-                    self._settings.remove("iiko/pass_sha1")
-                    self._settings.remove("iiko/password")
-                except Exception:
-                    pass
-                self._iiko_pass_sha1_cached = ""
-                QMessageBox.warning(self, "iiko", "Доступ не получен (401). Данные сброшены — введите пароль ещё раз.")
-                return
-            QMessageBox.critical(self, "iiko", msg)
+            QMessageBox.critical(self, "iiko", str(e))
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
@@ -1070,7 +1855,8 @@ class MainWindow(QMainWindow):
         """Показывает список блюд без фильтра (с ограничением по количеству)."""
         try:
             if not self._pricelist_dishes:
-                if not self._ensure_iiko_pass_sha1():
+                if not self._can_autoload_iiko_products():
+                    QMessageBox.warning(self, "iiko", "Сначала нажмите 'Авторизация точки'.")
                     return
                 self._load_pricelist_dishes()
 
@@ -1104,8 +1890,8 @@ class MainWindow(QMainWindow):
         if len(q) < 2:
             return
 
-        # Автозагрузка подсказок: только если sha1(pass) уже сохранён (чтобы не всплывало окно ввода пароля при наборе текста)
-        if (not self._pricelist_dishes) and bool(self._iiko_pass_sha1_cached):
+        # Автозагрузка подсказок: только если авторизация точки уже сделана
+        if (not self._pricelist_dishes) and self._can_autoload_iiko_products():
             try:
                 self._load_pricelist_dishes()
             except Exception:

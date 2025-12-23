@@ -113,9 +113,13 @@ class IikoRmsClient:
         self.base_url = base_url.rstrip("/")
         self.login = login
         self.pass_sha1 = (pass_sha1 or "").strip().lower()
+        self._key_cache: Optional[str] = None
 
     def auth_key(self) -> str:
         """Получает auth key (строку-токен)."""
+        if self._key_cache:
+            return self._key_cache
+
         if not self.login or not self.pass_sha1:
             raise IikoApiError("Не задан login или sha1-хэш пароля (pass).")
 
@@ -132,6 +136,7 @@ class IikoRmsClient:
             raise
 
         if key and ("error" not in key.lower()):
+            self._key_cache = key
             return key
 
         raise IikoApiError(f"Не удалось получить ключ авторизации. Ответ: {key[:200]}")
@@ -152,6 +157,46 @@ class IikoRmsClient:
                 last_err = str(e)
                 continue
         raise IikoApiError(f"Не удалось загрузить номенклатуру: {last_err}")
+
+    def open_product_from_stoplist(self, product_id: str) -> None:
+        """Открыть блюдо = попытаться снять его со стоп-листа (сделать доступным).
+
+        Точный эндпоинт зависит от версии iikoRMS, поэтому пробуем несколько вариантов.
+        """
+        product_id = _safe_str(product_id)
+        if not product_id:
+            raise IikoApiError("Не задан product_id для снятия со стоп-листа.")
+
+        key = self.auth_key()
+
+        candidates: List[Tuple[str, str]] = [
+            # Часто встречается remove
+            ("POST", f"{self.base_url}/api/stopList/remove?{urlencode({'key': key, 'productId': product_id})}"),
+            ("GET", f"{self.base_url}/api/stopList/remove?{urlencode({'key': key, 'productId': product_id})}"),
+            # Иногда снятие = установка остатка 0 через add
+            ("POST", f"{self.base_url}/api/stopList/add?{urlencode({'key': key, 'productId': product_id, 'balance': '0'})}"),
+            ("GET", f"{self.base_url}/api/stopList/add?{urlencode({'key': key, 'productId': product_id, 'balance': '0'})}"),
+        ]
+
+        last_err: Optional[str] = None
+        for method, url in candidates:
+            try:
+                resp = _http_post_text(url) if method == "POST" else _http_get_text(url)
+                low = (resp or "").lower()
+                if (resp == "") or ("ok" in low) or ("true" in low) or ("success" in low):
+                    return
+                # Некоторые API возвращают JSON/строку без "error"
+                if resp and ("error" not in low):
+                    return
+                last_err = resp
+            except IikoApiError as e:
+                last_err = str(e)
+                continue
+
+        raise IikoApiError(
+            "Не удалось снять блюдо со стоп-листа через REST API. "
+            f"Последняя ошибка: {last_err or ''}"
+        )
 
     def get_products(self) -> List[IikoProduct]:
         key = self.auth_key()
