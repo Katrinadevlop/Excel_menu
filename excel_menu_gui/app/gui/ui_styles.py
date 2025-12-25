@@ -22,8 +22,8 @@ class AppStyles:
     
     # === WINDOW SETTINGS ===
     WINDOW_DEFAULT_SIZE = (1600, 900)
-    # При повышенном DPI/масштабе Windows (125–150%) маленькое окно визуально «сминает» интерфейс.
-    WINDOW_MIN_SIZE = (1600, 840)
+    # Минимальный размер окна (можно сделать меньше, если нужно компактное расположение)
+    WINDOW_MIN_SIZE = (1200, 700)
     WINDOW_ICON_SIZE = 256
     
     # === SPACING AND MARGINS ===

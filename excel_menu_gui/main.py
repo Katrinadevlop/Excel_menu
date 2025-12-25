@@ -307,10 +307,11 @@ class MainWindow(QMainWindow):
         self.layTop.addWidget(self.btnDownloadTemplate)
         self.layTop.addWidget(self.btnMakePresentation)
         self.layTop.addWidget(self.btnBrokerage)
-        self.layTop.addWidget(self.btnOpenMenu)
-        self.layTop.addWidget(self.btnOpenTomorrowDishes)
+        # Временно скрываем кнопки iiko (авторизация/открыть/ценники) с панели
+        # self.layTop.addWidget(self.btnOpenMenu)
+        # self.layTop.addWidget(self.btnOpenTomorrowDishes)
+        # self.layTop.addWidget(self.btnDownloadPricelists)
         self.layTop.addWidget(self.btnDocuments)
-        self.layTop.addWidget(self.btnDownloadPricelists)
 
         # Apply centralized stylesheet (already set in StyleManager.setup_main_window)
 
@@ -602,8 +603,8 @@ class MainWindow(QMainWindow):
         self.btnBirthdayFile.clicked.connect(self.open_birthday_file)
         StyleManager.style_action_button(self.btnBirthdayFile)
 
-        self.btnHygieneJournal = QPushButton("Скачать гигиенический журнал")
-        self.btnHygieneJournal.clicked.connect(self.download_hygiene_journal)
+        self.btnHygieneJournal = QPushButton("Открыть гигиенический журнал")
+        self.btnHygieneJournal.clicked.connect(self.open_hygiene_journal)
         StyleManager.style_action_button(self.btnHygieneJournal)
 
         docs_layout.addWidget(self.btnVacationStatement)
@@ -1200,8 +1201,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
-    def download_hygiene_journal(self) -> None:
-        """Скачать шаблон гигиенического журнала из папки templates."""
+    def open_hygiene_journal(self) -> None:
+        """Открывает шаблон гигиенического журнала из папки templates."""
         try:
             template_path = find_template("Гигиенический журнал.xlsx")
             if not template_path:
@@ -1212,19 +1213,13 @@ class MainWindow(QMainWindow):
                 )
                 return
 
-            desktop = Path.home() / "Desktop"
-            suggested_path = str(desktop / "Гигиенический журнал.xlsx")
-
-            save_path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Скачать гигиенический журнал",
-                suggested_path,
-                "Excel (*.xlsx);;Excel (*.xls);;Все файлы (*.*)",
-            )
-            if not save_path:
-                return
-
-            shutil.copyfile(template_path, save_path)
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
