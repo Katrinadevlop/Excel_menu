@@ -607,10 +607,45 @@ class MainWindow(QMainWindow):
         self.btnHygieneJournal.clicked.connect(self.open_hygiene_journal)
         StyleManager.style_action_button(self.btnHygieneJournal)
 
+        self.btnDirection = QPushButton("Направление")
+        self.btnDirection.clicked.connect(self.open_direction_document)
+        StyleManager.style_action_button(self.btnDirection)
+
+        self.btnLockerDoc = QPushButton("Раздевалка")
+        self.btnLockerDoc.clicked.connect(self.open_locker_document)
+        StyleManager.style_action_button(self.btnLockerDoc)
+
+        self.btnFridgeTemp = QPushButton("Температура холодильник")
+        self.btnFridgeTemp.clicked.connect(self.open_fridge_temperature)
+        StyleManager.style_action_button(self.btnFridgeTemp)
+
+        self.btnFreezerTemp = QPushButton("Температура морозилка")
+        self.btnFreezerTemp.clicked.connect(self.open_freezer_temperature)
+        StyleManager.style_action_button(self.btnFreezerTemp)
+
+        self.btnBuffetSheet = QPushButton("Буфет бумажка")
+        self.btnBuffetSheet.clicked.connect(self.open_buffet_sheet)
+        StyleManager.style_action_button(self.btnBuffetSheet)
+
+        self.btnBakerSheet = QPushButton("Пекарь бумажка")
+        self.btnBakerSheet.clicked.connect(self.open_baker_sheet)
+        StyleManager.style_action_button(self.btnBakerSheet)
+
+        self.btnFryerJournal = QPushButton("Журнал фритюрного масла")
+        self.btnFryerJournal.clicked.connect(self.open_fryer_oil_journal)
+        StyleManager.style_action_button(self.btnFryerJournal)
+
         docs_layout.addWidget(self.btnVacationStatement)
         docs_layout.addWidget(self.btnMedicalBooks)
         docs_layout.addWidget(self.btnBirthdayFile)
         docs_layout.addWidget(self.btnHygieneJournal)
+        docs_layout.addWidget(self.btnDirection)
+        docs_layout.addWidget(self.btnLockerDoc)
+        docs_layout.addWidget(self.btnFridgeTemp)
+        docs_layout.addWidget(self.btnFreezerTemp)
+        docs_layout.addWidget(self.btnBuffetSheet)
+        docs_layout.addWidget(self.btnBakerSheet)
+        docs_layout.addWidget(self.btnFryerJournal)
         docs_layout.addStretch(1)
 
         self.grpDocuments = nice_group("Документы", docs_box)
@@ -1210,6 +1245,160 @@ class MainWindow(QMainWindow):
                     self,
                     "Шаблон",
                     "Файл 'Гигиенический журнал.xlsx' не найден. Положите его в папку templates.",
+                )
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_direction_document(self) -> None:
+        """Открывает шаблон направления из папки templates (Направление.doc)."""
+        try:
+            template_path = find_template("Направление.doc")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Направление.doc' не найден. Положите его в папку templates.",
+                )
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_locker_document(self) -> None:
+        """Открывает шаблон документа "Раздевалка" из папки templates (Раздевалка.xlsx)."""
+        try:
+            template_path = find_template("Раздевалка.xlsx")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Раздевалка.xlsx' не найден. Положите его в папку templates.",
+                )
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_buffet_sheet(self) -> None:
+        """Открывает шаблон "Бланк для раздачи кофетерий" из templates."""
+        try:
+            template_path = find_template("Бланк для раздачи кофетерий.xlsx")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Бланк для раздачи кофетерий.xlsx' не найден. Положите его в папку templates.",
+                )
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_baker_sheet(self) -> None:
+        """Открывает шаблон "Акт_приготовления_ВЫПЕЧКАДЕСЕРТЫ" из templates."""
+        try:
+            template_path = find_template("Акт_приготовления_ВЫПЕЧКАДЕСЕРТЫ.xlsx")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Акт_приготовления_ВЫПЕЧКАДЕСЕРТЫ.xlsx' не найден. Положите его в папку templates.",
+                )
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_fryer_oil_journal(self) -> None:
+        """Открывает шаблон "Журнал замены фритюрного масла" из templates."""
+        try:
+            template_path = find_template("Журнал замены фритюрного масла.doc")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Журнал замены фритюрного масла.doc' не найден. Положите его в папку templates.",
+                )
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_fridge_temperature(self) -> None:
+        """Открывает шаблон "Температурный режим холодильного оборудования" из templates."""
+        try:
+            template_path = find_template("Температурный_режим_холодильньного_оборудования.docx")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Температурный_режим_холодильньного_оборудования.docx' не найден. Положите его в папку templates.",
+                )
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_freezer_temperature(self) -> None:
+        """Открывает шаблон "Температурный режим морозильного оборудования" из templates."""
+        try:
+            template_path = find_template("Температурный_режим_морозильного_оборудования.docx")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Температурный_режим_морозильного_оборудования.docx' не найден. Положите его в папку templates.",
                 )
                 return
 

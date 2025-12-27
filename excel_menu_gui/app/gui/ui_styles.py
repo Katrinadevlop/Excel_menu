@@ -21,9 +21,10 @@ class AppStyles:
     """
     
     # === WINDOW SETTINGS ===
-    WINDOW_DEFAULT_SIZE = (1600, 900)
-    # Минимальный размер окна (можно сделать меньше, если нужно компактное расположение)
-    WINDOW_MIN_SIZE = (1200, 700)
+    # По умолчанию более компактная ширина окна
+    WINDOW_DEFAULT_SIZE = (1200, 800)
+    # Минимальный размер окна
+    WINDOW_MIN_SIZE = (1000, 650)
     WINDOW_ICON_SIZE = 256
     
     # === SPACING AND MARGINS ===
@@ -145,6 +146,14 @@ class ButtonStyles:
         "font-size": f"{AppStyles.BUTTON_FONT_SIZE}px",
         "font-weight": AppStyles.BUTTON_FONT_WEIGHT,
         "min-width": "120px",
+    }
+
+    # Более компактные кнопки для раздела "Документы"
+    DOC_BUTTON = {
+        "padding": DEFAULT_PADDING,
+        "font-size": f"{AppStyles.BUTTON_FONT_SIZE}px",
+        "font-weight": AppStyles.BUTTON_FONT_WEIGHT,
+        "min-width": "90px",
     }
     
     @classmethod
@@ -455,6 +464,11 @@ class StyleManager:
             button: QPushButton для стилизации как кнопка действия
         """
         ButtonStyles.apply_button_style(button, ButtonStyles.ACTION_BUTTON)
+
+    @classmethod
+    def style_doc_button(cls, button) -> None:
+        """Применяет компактный стиль кнопки для раздела "Документы"."""
+        ButtonStyles.apply_button_style(button, ButtonStyles.DOC_BUTTON)
     
     @classmethod
     def style_browse_button(cls, button) -> None:
