@@ -32,6 +32,7 @@ from app.services.dish_extractor import extract_all_dishes_with_details, DishIte
 from app.integrations.iiko_rms_client import IikoRmsClient, IikoApiError
 from app.integrations.iiko_cloud_v1_client import IikoCloudV1Client, IikoOrganization
 from app.services.menu_template_filler import MenuTemplateFiller
+from tools.fill_dynamic_menu import fill_dynamic_menu
 from app.gui.ui_styles import (
     AppStyles, ButtonStyles, LayoutStyles, StyleSheets, ComponentStyles,
     StyleManager, ThemeAwareStyles
@@ -1674,73 +1675,40 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
     def do_fill_template_with_data(self):
-        """Заполняет шаблон меню данными из Excel файла"""
+        """Заполняет шаблон меню сегментным алгоритмом (A-F)."""
         try:
-            # Получаем путь к Excel файлу с меню
             excel_path = self.edExcelPath.text().strip()
             if not excel_path:
                 QMessageBox.warning(self, "Внимание", "Выберите Excel файл с меню.")
                 return
-            
-            # Проверяем существование Excel файла
             if not Path(excel_path).exists():
                 QMessageBox.warning(self, "Ошибка", "Указанный Excel файл не найден.")
                 return
-                
-            # Находим шаблон меню
+
             template_path = default_template_path()
             if not template_path or not Path(template_path).exists():
                 QMessageBox.warning(self, "Шаблон", "Шаблон меню не найден. Положите файл шаблона в папку templates/.")
                 return
-            
-            # Получаем дату для названия файла
-            from datetime import date
-            
-            # Создаём экземпляр класса заполнения шаблона
-            filler = MenuTemplateFiller()
-            
-            # Получаем дату из меню
-            menu_date = filler.extract_date_from_menu(excel_path)
-            
-            # Формируем имя "<день> <месяц> - <день недели>.xlsx"
-            russian_months = {
-                1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля', 5: 'мая', 6: 'июня',
-                7: 'июля', 8: 'августа', 9: 'сентября', 10: 'октября', 11: 'ноября', 12: 'декабря'
-            }
-            weekday_names = {
-                0: 'понедельник', 1: 'вторник', 2: 'среда', 3: 'четверг', 4: 'пятница', 5: 'суббота', 6: 'воскресенье'
-            }
-            if menu_date:
-                d, m, wd = menu_date.day, menu_date.month, menu_date.weekday()
-            else:
-                today = date.today()
-                d, m, wd = today.day, today.month, today.weekday()
-            suggested_name = f"{d} {russian_months.get(m, '')} - {weekday_names.get(wd, '')}.xlsx"
-            
-            # Выбираем место сохранения заполненного шаблона
+
             desktop = Path.home() / "Desktop"
-            suggested_path = str(desktop / suggested_name)
-            
+            suggested_path = str(desktop / "menu_ready.xlsx")
             save_path, _ = QFileDialog.getSaveFileName(
                 self,
-                "Сохранить заполненный шаблон меню",
+                "Сохранить динамически заполненный шаблон",
                 suggested_path,
-                "Excel (*.xlsx);;Excel (*.xls);;Все файлы (*.*)"
+                "Excel (*.xlsx);;Все файлы (*.*)",
             )
-            
             if not save_path:
-                return  # Пользователь отменил сохранение
-                
-            # Копирование прямоугольника A6..F42 с листа «Касса» источника в лист «Касса» шаблона
-            success, message = filler.copy_kassa_rect_A6_F42(
-                template_path=template_path,
-                source_menu_path=excel_path,
-                output_path=save_path,
+                return
+
+            fill_dynamic_menu(
+                Path(excel_path),
+                Path(template_path),
+                Path(save_path),
+                source_sheet="Касса",
+                template_sheet="Касса",
             )
-            
-            if not success:
-                QMessageBox.warning(self, "Ошибка", f"Не удалось выполнить операцию:\n{message}")
-                
+            QMessageBox.information(self, "Готово", "Шаблон успешно заполнен по сегментам.")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
