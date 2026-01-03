@@ -65,6 +65,17 @@ def is_header_right(value) -> bool:
     return norm(value) in RIGHT_LOOKUP
 
 
+def is_footer_text(value) -> bool:
+    """True если это строка-футер (дисклеймер) внизу меню."""
+    if not isinstance(value, str):
+        return False
+    s = norm(value)
+    # В шаблоне/меню обычно 2 строки дисклеймера:
+    # 1) начинается с "*ПРИ НАЛИЧИИ У ВАС АЛЛЕРГИИ..."
+    # 2) начинается с "Блюда могут содержать следы..."
+    return s.startswith("*при наличии у вас аллерг") or s.startswith("блюда могут содержать")
+
+
 @dataclass
 class Segment:
     index: int
@@ -430,6 +441,105 @@ def compact_cells_shift_up(ws: Worksheet, cols: Tuple[int, ...], row_from: int, 
             _set_cell(ws, r, c, None)
 
 
+def _table_bounds(segments: List[Segment]) -> Tuple[int, int]:
+    row_from = min(s.top_row for s in segments)
+    row_to = max(s.bottom_row for s in segments) - 1
+    return row_from, row_to
+
+
+def _last_nonempty_row(ws: Worksheet, cols: Tuple[int, ...], row_from: int, row_to: int) -> int:
+    last = row_from - 1
+    for r in range(row_from, row_to + 1):
+        if any(not is_blank_value(ws.cell(row=r, column=c).value) for c in cols):
+            last = r
+    return last
+
+
+def _with_value(snap: Tuple, value) -> Tuple:
+    # snap: (value, font, border, fill, number_format, alignment, protection)
+    return (value, snap[1], snap[2], snap[3], snap[4], snap[5], snap[6])
+
+
+def capture_footer_row_styles_from_template(ws: Worksheet) -> List[Tuple[List[Tuple], float | None]]:
+    """Снимает стили строк-дисклеймеров из шаблона ДО unmerge/insert_rows.
+
+    Возвращает список (cell_snaps_for_A_to_F, row_height) в порядке появления.
+    """
+    styles: List[Tuple[List[Tuple], float | None]] = []
+    for r in range(1, ws.max_row + 1):
+        a = ws.cell(row=r, column=1).value
+        if is_footer_text(a):
+            snaps = [_snapshot_cell(ws.cell(row=r, column=c)) for c in range(1, 7)]
+            styles.append((snaps, ws.row_dimensions[r].height))
+    return styles
+
+
+def extract_footer_texts_and_clear_left(ws: Worksheet, row_from: int, row_to: int) -> List[str]:
+    """Забирает тексты дисклеймера из колонки A и очищает A:C.
+
+    Важно: чистим только A:C, чтобы не трогать правую половину (там может быть 'Хрен' и другие соусы).
+    """
+    texts: List[str] = []
+    for r in range(row_from, row_to + 1):
+        a = ws.cell(row=r, column=1).value
+        if is_footer_text(a):
+            texts.append(str(a))
+            for c in (1, 2, 3):
+                _set_cell(ws, r, c, None)
+    return texts
+
+
+def place_footer_rows_below_last_item(
+    ws: Worksheet,
+    footer_texts: List[str],
+    footer_styles: List[Tuple[List[Tuple], float | None]],
+    row_from: int,
+    row_to: int,
+) -> None:
+    """Ставит строки дисклеймера сразу после последней строки с данными (с учётом обеих половин)."""
+    if not footer_texts:
+        return
+
+    last_left = _last_nonempty_row(ws, cols=(1, 2, 3), row_from=row_from, row_to=row_to)
+    last_right = _last_nonempty_row(ws, cols=(4, 5, 6), row_from=row_from, row_to=row_to)
+    insert_at = max(last_left, last_right) + 1
+
+    needed_last = insert_at + len(footer_texts) - 1
+    if needed_last > row_to:
+        ws.insert_rows(row_to + 1, amount=needed_last - row_to)
+        row_to = needed_last
+
+    # Если стилей нет — просто пишем как есть.
+    fallback_snaps: List[Tuple] | None = None
+    fallback_height: float | None = None
+    if footer_styles:
+        fallback_snaps, fallback_height = footer_styles[0]
+
+    for i, text in enumerate(footer_texts):
+        r = insert_at + i
+        snaps, height = (footer_styles[i] if i < len(footer_styles) else (fallback_snaps, fallback_height))
+
+        if snaps:
+            # Применяем стили на A:F, но значения оставляем только в A.
+            for c in range(1, 7):
+                base = snaps[c - 1]
+                value = text if c == 1 else None
+                _apply_cell_snapshot(ws, r, c, _with_value(base, value))
+        else:
+            _set_cell(ws, r, 1, text)
+            for c in range(2, 7):
+                _set_cell(ws, r, c, None)
+
+        if height is not None:
+            ws.row_dimensions[r].height = height
+
+        # В шаблоне футеры объединены на всю ширину A:F.
+        try:
+            ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=6)
+        except Exception:
+            pass
+
+
 def compact_menu_table_sides(ws: Worksheet, segments: List[Segment]) -> None:
     """Убирает 'дыры' слева/справа в области таблицы меню, не трогая вторую половину.
 
@@ -437,8 +547,7 @@ def compact_menu_table_sides(ws: Worksheet, segments: List[Segment]) -> None:
     """
     if not segments:
         return
-    row_from = min(s.top_row for s in segments)
-    row_to = max(s.bottom_row for s in segments) - 1
+    row_from, row_to = _table_bounds(segments)
     compact_cells_shift_up(ws, cols=(1, 2, 3), row_from=row_from, row_to=row_to)
     compact_cells_shift_up(ws, cols=(4, 5, 6), row_from=row_from, row_to=row_to)
 
@@ -454,6 +563,10 @@ def fill_dynamic_menu(
     tpl_wb = load_workbook(template_path)
     src_ws = src_wb[source_sheet]
     tpl_ws = tpl_wb[template_sheet]
+
+    # Сохраняем стили футера (дисклеймеров) из шаблона ДО unmerge/insert_rows,
+    # чтобы потом корректно вернуть объединение A:F и формат.
+    footer_styles = capture_footer_row_styles_from_template(tpl_ws)
 
     src_segments = parse_segments(src_ws)
     tpl_segments = parse_segments(tpl_ws)
@@ -478,10 +591,27 @@ def fill_dynamic_menu(
     # потому что компактация может «передвигать» заголовки по строкам внутри половины листа.
     validate(tpl_segments, payloads)
 
+    # Дисклеймеры внизу (2 строки) должны быть ПОСЛЕ всех блюд/соусов.
+    # В некоторых файлах последняя позиция справа ('Хрен') попадает на одну строку с дисклеймером слева.
+    # Поэтому:
+    # 1) забираем тексты дисклеймера из A и чистим A:C (не трогаем D:F)
+    # 2) делаем компактацию половин
+    # 3) ставим дисклеймеры сразу под последней строкой (max по обеим половинам) и объединяем A:F
+    row_from, row_to = _table_bounds(tpl_segments)
+    footer_texts = extract_footer_texts_and_clear_left(tpl_ws, row_from=row_from, row_to=row_to)
+
     # Пост-обработка: убрать «дыры» в левой/правой половине,
     # которые появляются из-за заголовков другой стороны.
     # Это аналог Excel: Delete cells -> Shift up только в A:C и отдельно только в D:F.
     compact_menu_table_sides(tpl_ws, tpl_segments)
+
+    place_footer_rows_below_last_item(
+        tpl_ws,
+        footer_texts=footer_texts,
+        footer_styles=footer_styles,
+        row_from=row_from,
+        row_to=row_to,
+    )
 
     tpl_wb.save(output_path)
 
