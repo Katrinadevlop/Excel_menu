@@ -402,7 +402,23 @@ class ThemeAwareStyles:
         """
         border = cls.get_border_color(is_dark)
         tooltip_border = cls.get_tooltip_border_color(is_dark)
-        
+
+        # Календарь: в светлой теме — бежевый, в тёмной — используем палитру приложения.
+        if is_dark:
+            cal_bg = "palette(Base)"
+            cal_text = "palette(Text)"
+            cal_sel_bg = "palette(Highlight)"
+            cal_sel_text = "palette(HighlightedText)"
+            cal_hover_bg = "palette(Button)"
+            cal_disabled_text = "#808080"
+        else:
+            cal_bg = "#f5f0e6"
+            cal_text = "#1b1b1b"
+            cal_sel_bg = "#e2c9a7"
+            cal_sel_text = "#1b1b1b"
+            cal_hover_bg = "#eadcc8"
+            cal_disabled_text = "#9a9a9a"
+
         return f"""
         QGroupBox {{
             border: 1px solid {border};
@@ -420,6 +436,41 @@ class ThemeAwareStyles:
             border: 1px solid {tooltip_border};
             padding: 4px;
             border-radius: {AppStyles.TINY_BORDER_RADIUS}px;
+        }}
+
+        QCalendarWidget {{
+            border: 1px solid {border};
+            border-radius: {AppStyles.SMALL_BORDER_RADIUS}px;
+        }}
+        QCalendarWidget QWidget {{
+            background-color: {cal_bg};
+            color: {cal_text};
+        }}
+        QCalendarWidget QAbstractItemView {{
+            background-color: {cal_bg};
+            color: {cal_text};
+            selection-background-color: {cal_sel_bg};
+            selection-color: {cal_sel_text};
+        }}
+        QCalendarWidget QAbstractItemView:disabled {{
+            color: {cal_disabled_text};
+        }}
+        QCalendarWidget QToolButton {{
+            background-color: {cal_bg};
+            color: {cal_text};
+            border: none;
+            padding: 4px 8px;
+        }}
+        QCalendarWidget QToolButton:hover {{
+            background-color: {cal_hover_bg};
+        }}
+        QCalendarWidget QMenu {{
+            background-color: {cal_bg};
+            color: {cal_text};
+        }}
+        QCalendarWidget QSpinBox {{
+            background-color: {cal_bg};
+            color: {cal_text};
         }}
         """
 

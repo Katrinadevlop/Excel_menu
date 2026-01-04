@@ -3,19 +3,24 @@ import sys
 import shutil
 import logging
 import hashlib
+import json
+import subprocess
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, date, time
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 from urllib.parse import urlsplit, parse_qsl
 
-from PySide6.QtCore import Qt, QMimeData, QSize, QUrl, QSettings, QEvent, QPoint
+from PySide6.QtCore import (
+    Qt, QMimeData, QSize, QUrl, QSettings, QEvent, QPoint, QTimer, QDate,
+    QObject, Signal, QThread, QCoreApplication, QLockFile,
+)
 from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QBrush, QLinearGradient, QFont, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QBoxLayout,
     QLabel, QPushButton, QFileDialog, QTextEdit, QComboBox, QLineEdit,
     QGroupBox, QCheckBox, QSpinBox, QRadioButton, QButtonGroup, QMessageBox, QFrame, QSizePolicy, QScrollArea,
-    QListWidget, QListWidgetItem, QInputDialog, QDialog, QDialogButtonBox,
+    QListWidget, QListWidgetItem, QInputDialog, QDialog, QDialogButtonBox, QCalendarWidget,
 )
 
 from app.services.comparator import compare_and_highlight, get_sheet_names, ColumnParseError
@@ -128,12 +133,404 @@ def find_template(filename: str) -> Optional[str]:
     return None
 
 
+def _open_schedule_task_name() -> str:
+    """Имя задачи Windows Task Scheduler для запланированного открытия блюд.
+
+    Делаем уникальным на случай нескольких копий приложения/папок.
+    """
+    base = "excel_menu_gui_open_dishes"
+    try:
+        suffix = hashlib.sha1(str(Path(__file__).resolve()).encode("utf-8")).hexdigest()[:8]
+        return f"{base}_{suffix}"
+    except Exception:
+        return base
+
+
+def _open_schedule_lock_path() -> str:
+    try:
+        tmp = os.getenv("TEMP") or os.getenv("TMP") or str(Path.cwd())
+        name = _open_schedule_task_name().replace("\\", "_").replace("/", "_")
+        return str(Path(tmp) / f"{name}.lock")
+    except Exception:
+        return "excel_menu_gui_open_schedule.lock"
+
+
+def _open_schedule_runner_tr() -> str:
+    """Команда (/TR) для Task Scheduler: запуск в режиме выполнения расписания."""
+    exe_path = Path(sys.executable)
+    exe = str(exe_path)
+
+    # Если это python.exe — попробуем pythonw.exe (без консоли)
+    try:
+        if exe_path.name.lower() == "python.exe":
+            pyw = exe_path.with_name("pythonw.exe")
+            if pyw.exists():
+                exe = str(pyw)
+    except Exception:
+        pass
+
+    # PyInstaller/frozen: запускаем exe
+    if bool(getattr(sys, "frozen", False)):
+        return f'"{exe}" --run-open-schedule'
+
+    # dev mode: запускаем скрипт
+    try:
+        script = str(Path(__file__).resolve())
+    except Exception:
+        script = str(__file__)
+    return f'"{exe}" "{script}" --run-open-schedule'
+
+
+def _windows_delete_open_schedule_task() -> None:
+    if os.name != "nt":
+        return
+
+    task_name = _open_schedule_task_name()
+    try:
+        subprocess.run(
+            ["schtasks", "/Delete", "/TN", task_name, "/F"],
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        pass
+
+
+def _windows_create_open_schedule_task(run_at: datetime) -> Tuple[bool, str]:
+    """Создаёт задачу Планировщика Windows для выполнения расписания.
+
+    Возвращает (ok, error_message).
+    """
+    if os.name != "nt":
+        return False, "Windows Task Scheduler доступен только на Windows"
+
+    task_name = _open_schedule_task_name()
+    tr = _open_schedule_runner_tr()
+
+    try:
+        sd = run_at.strftime("%m/%d/%Y")
+        st = run_at.strftime("%H:%M")
+    except Exception:
+        return False, "Некорректная дата/время"
+
+    # Пытаемся запускать от имени текущего пользователя без сохранения пароля.
+    # Это позволяет запускать задачу даже если приложение закрыто.
+    ru_user = ""
+    try:
+        un = (os.getenv("USERNAME") or "").strip()
+        ud = (os.getenv("USERDOMAIN") or os.getenv("COMPUTERNAME") or "").strip()
+        if un and ud:
+            ru_user = f"{ud}\\{un}"
+        else:
+            ru_user = un
+        if not ru_user:
+            ru_user = (os.getlogin() or "").strip()
+    except Exception:
+        ru_user = ""
+
+    cmd = [
+        "schtasks",
+        "/Create",
+        "/F",
+        "/SC",
+        "ONCE",
+        "/TN",
+        task_name,
+        "/TR",
+        tr,
+        "/ST",
+        st,
+        "/SD",
+        sd,
+        "/RL",
+        "LIMITED",
+    ]
+
+    # /NP требует /RU; если пользователя не удалось определить — попробуем без него (может сработать на некоторых системах)
+    if ru_user:
+        cmd += ["/RU", ru_user, "/NP"]
+
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True)
+    except Exception as e:
+        return False, str(e)
+
+    if int(getattr(res, "returncode", 1)) == 0:
+        return True, ""
+
+    err = (getattr(res, "stderr", "") or "").strip()
+    out = (getattr(res, "stdout", "") or "").strip()
+    return False, err or out or "Не удалось создать задачу Планировщика Windows"
+
+
+def run_open_schedule_due_silent() -> int:
+    """CLI/TaskScheduler entrypoint: выполняет запланированное открытие, если наступило время."""
+    # Лок защищает от двойного запуска (если открыт GUI + параллельно сработал schtasks)
+    lock = QLockFile(_open_schedule_lock_path())
+    try:
+        lock.setStaleLockTime(10 * 60 * 1000)
+    except Exception:
+        pass
+
+    if not lock.tryLock(0):
+        return 0
+
+    try:
+        settings = QSettings("excel_menu_gui", "excel_menu_gui")
+
+        raw = settings.value("iiko/open_dishes/schedule", "")
+        raw_s = str(raw) if raw is not None else ""
+        if not raw_s:
+            _windows_delete_open_schedule_task()
+            return 0
+
+        try:
+            job = json.loads(raw_s)
+        except Exception:
+            # мусор — очищаем
+            try:
+                settings.remove("iiko/open_dishes/schedule")
+            except Exception:
+                pass
+            _windows_delete_open_schedule_task()
+            return 0
+
+        if not isinstance(job, dict):
+            try:
+                settings.remove("iiko/open_dishes/schedule")
+            except Exception:
+                pass
+            _windows_delete_open_schedule_task()
+            return 0
+
+        state = str(job.get("state") or "pending").strip().lower()
+        if state in ("done", "failed"):
+            _windows_delete_open_schedule_task()
+            return 0
+
+        run_at_s = str(job.get("run_at") or "")
+        try:
+            dt_run = datetime.fromisoformat(run_at_s)
+        except Exception:
+            return 0
+
+        if datetime.now() < dt_run:
+            return 0
+
+        product_ids = job.get("product_ids") or []
+        if not isinstance(product_ids, list) or not product_ids:
+            try:
+                settings.remove("iiko/open_dishes/schedule")
+            except Exception:
+                pass
+            _windows_delete_open_schedule_task()
+            return 0
+
+        # читаем REST-параметры
+        mode = str(settings.value("iiko/mode", "cloud") or "cloud").strip().lower()
+        if mode not in ("rest", "rms", "resto"):
+            raise IikoApiError("Открытие блюд по расписанию доступно только в режиме REST (/resto).")
+
+        base_url = str(settings.value("iiko/base_url", "") or "").strip()
+        login = str(settings.value("iiko/login", "") or "").strip()
+        pass_sha1 = str(settings.value("iiko/pass_sha1", "") or "").strip()
+        if not (base_url and login and pass_sha1):
+            raise IikoApiError("Не заданы параметры REST (/resto) или не сохранён SHA1 пароля.")
+
+        client = IikoRmsClient(base_url=base_url, login=login, pass_sha1=pass_sha1)
+
+        ok = 0
+        for pid in product_ids:
+            pid_s = str(pid).strip()
+            if not pid_s:
+                continue
+            client.open_product_from_stoplist(pid_s)
+            ok += 1
+
+        # успех -> очищаем расписание
+        try:
+            settings.remove("iiko/open_dishes/schedule")
+        except Exception:
+            pass
+
+        _windows_delete_open_schedule_task()
+        return ok
+
+    except IikoApiError as e:
+        # пометим как failed
+        try:
+            job = locals().get("job") if "job" in locals() else None
+            if isinstance(job, dict):
+                job["state"] = "failed"
+                job["last_error"] = str(e)
+                try:
+                    job["failed_at"] = datetime.now().isoformat(timespec="seconds")
+                except Exception:
+                    pass
+                settings.setValue("iiko/open_dishes/schedule", json.dumps(job, ensure_ascii=False))
+        except Exception:
+            pass
+
+        _windows_delete_open_schedule_task()
+        return -1
+
+    except Exception:
+        return -1
+
+    finally:
+        try:
+            lock.unlock()
+        except Exception:
+            pass
+
+
 @dataclass
 class FileConfig:
     path: str = ""
     sheet: str = ""
     col: str = "A"
     header_row_1based: int = 1
+
+
+class IikoProductsLoadWorker(QObject):
+    """Загружает номенклатуру iiko в фоне, чтобы UI не зависал."""
+
+    finished = Signal(int, object)  # seq, result dict
+    failed = Signal(int, str)       # seq, error
+
+    def __init__(self, seq: int, snapshot: dict):
+        super().__init__()
+        self.seq = int(seq)
+        self.snapshot = snapshot or {}
+
+    def run(self) -> None:
+        try:
+            res = self._do_fetch_and_index()
+            self.finished.emit(self.seq, res)
+        except Exception as e:
+            self.failed.emit(self.seq, str(e))
+
+    def _do_fetch_and_index(self) -> dict:
+        mode = str(self.snapshot.get("mode") or "").strip().lower()
+
+        # --- fetch ---
+        products: List[Any] = []
+        biz_new_token: str = ""
+
+        if mode in ("cloud", "cloud_v1", "cloudv1", "v1"):
+            api_url = str(self.snapshot.get("cloud_api_url") or "").strip() or "https://api-ru.iiko.services"
+            api_login = str(self.snapshot.get("cloud_api_login") or "").strip()
+            org_id = str(self.snapshot.get("cloud_org_id") or "").strip()
+            token = str(self.snapshot.get("cloud_access_token") or "").strip()
+            if not (api_login and org_id and token):
+                raise IikoApiError("Не заданы параметры iikoCloud. Нажмите 'Авторизация точки'.")
+            client = IikoCloudV1Client(
+                api_url=api_url,
+                api_login=api_login,
+                organization_id=org_id,
+                access_token=token,
+            )
+            products = client.get_products()
+
+        elif mode in ("biz", "transport", "iikobiz", "iiko.biz"):
+            api_url = str(self.snapshot.get("biz_api_url") or "").strip() or "https://iiko.biz:9900"
+            user_id = str(self.snapshot.get("biz_user_id") or "").strip()
+            user_secret = str(self.snapshot.get("biz_user_secret") or "").strip()
+            org_id = str(self.snapshot.get("biz_org_id") or "").strip()
+            token = str(self.snapshot.get("biz_access_token") or "").strip()
+
+            if not org_id:
+                raise IikoApiError("Не выбрана организация. Нажмите 'Авторизация точки'.")
+
+            if not token and not (user_id and user_secret):
+                raise IikoApiError("Не задан user_id/user_secret или access_token iikoTransport.")
+
+            client = IikoTransportClient(
+                api_url=api_url,
+                user_id=user_id,
+                user_secret=user_secret,
+                organization_id=org_id,
+                access_token=token,
+            )
+
+            try:
+                products = client.get_products()
+            except IikoApiError as e:
+                low = str(e).lower()
+                if ("http 401" in low or "http 403" in low) and (user_id and user_secret):
+                    # обновим токен
+                    client2 = IikoTransportClient(
+                        api_url=api_url,
+                        user_id=user_id,
+                        user_secret=user_secret,
+                        organization_id=org_id,
+                    )
+                    products = client2.get_products()
+                    try:
+                        biz_new_token = (client2.access_token() or "").strip()
+                    except Exception:
+                        biz_new_token = ""
+                else:
+                    raise
+
+        else:
+            # REST (/resto)
+            base_url = str(self.snapshot.get("rest_base_url") or "").strip()
+            login = str(self.snapshot.get("rest_login") or "").strip()
+            pass_sha1 = str(self.snapshot.get("rest_pass_sha1") or "").strip()
+            if not (base_url and login and pass_sha1):
+                raise IikoApiError("Не заданы параметры REST (/resto). Нажмите 'Авторизация точки'.")
+            client = IikoRmsClient(base_url=base_url, login=login, pass_sha1=pass_sha1)
+            products = client.get_products()
+
+        products = list(products or [])
+
+        # --- index for fast search ---
+        def norm_sub(s: Any) -> str:
+            return str(s or "").lower().replace("ё", "е")
+
+        def pl_key(s: Any) -> str:
+            return " ".join(str(s or "").strip().lower().replace("ё", "е").split())
+
+        open_norm: List[Tuple[str, Any]] = []
+        open_exact: dict[str, Any] = {}
+
+        pricelist_dishes: List[DishItem] = []
+        pricelist_norm: List[Tuple[str, DishItem]] = []
+        pricelist_exact: dict[str, DishItem] = {}
+
+        for p in products:
+            name = (getattr(p, "name", "") or "").strip()
+            if not name:
+                continue
+
+            nsub = norm_sub(name)
+            open_norm.append((nsub, p))
+            k = pl_key(name)
+            if k and (k not in open_exact):
+                open_exact[k] = p
+
+            d = DishItem(
+                name=name,
+                weight=(getattr(p, "weight", "") or ""),
+                price=(getattr(p, "price", "") or ""),
+            )
+            pricelist_dishes.append(d)
+            pricelist_norm.append((norm_sub(d.name), d))
+            kd = pl_key(d.name)
+            if kd and (kd not in pricelist_exact):
+                pricelist_exact[kd] = d
+
+        return {
+            "mode": mode,
+            "products": products,
+            "open_norm": open_norm,
+            "open_exact": open_exact,
+            "pricelist_dishes": pricelist_dishes,
+            "pricelist_norm": pricelist_norm,
+            "pricelist_exact": pricelist_exact,
+            "biz_new_token": biz_new_token,
+        }
 
 
 class MainWindow(QMainWindow):
@@ -235,10 +632,26 @@ class MainWindow(QMainWindow):
             pass
 
         try:
+            # инвалидируем возможную фоновую загрузку
+            try:
+                self._iiko_products_load_seq = int(getattr(self, "_iiko_products_load_seq", 0)) + 1
+            except Exception:
+                pass
+
+            self._iiko_products_loaded = False
             self._iiko_products_by_key = {}
             self._pricelist_dishes = []
             self._open_iiko_products = []
             self._open_selected_ids = set()
+
+            # индексы для быстрого поиска
+            self._open_iiko_products_norm = []
+            self._open_iiko_products_exact = {}
+            self._pricelist_dishes_norm = []
+            self._pricelist_dishes_exact = {}
+
+            self._open_show_all_requested = False
+            self._pricelist_show_all_requested = False
         except Exception:
             pass
 
@@ -520,6 +933,25 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        # ===== Оптимизация: загрузка iiko в фоне + быстрый поиск =====
+        self._iiko_products_loaded: bool = False
+        self._iiko_products_loading: bool = False
+        self._iiko_products_load_seq: int = 0
+        self._iiko_products_load_thread: Optional[QThread] = None
+        self._iiko_products_load_worker: Optional[IikoProductsLoadWorker] = None
+        self._iiko_products_load_origin: str = ""
+        self._iiko_products_load_user_initiated: bool = False
+
+        # Индексы для быстрого поиска (строятся после загрузки)
+        self._open_iiko_products_norm: List[Tuple[str, Any]] = []
+        self._open_iiko_products_exact: dict[str, Any] = {}
+        self._pricelist_dishes_norm: List[Tuple[str, DishItem]] = []
+        self._pricelist_dishes_exact: dict[str, DishItem] = {}
+
+        # Флаги отложенных действий, если пользователь нажал кнопку до завершения загрузки
+        self._open_show_all_requested: bool = False
+        self._pricelist_show_all_requested: bool = False
+
         src_row = QWidget(); src_layout = QHBoxLayout(src_row)
         LayoutStyles.apply_margins(src_layout, LayoutStyles.NO_MARGINS)
         src_layout.addWidget(QLabel("Источник: iiko"))
@@ -527,7 +959,13 @@ class MainWindow(QMainWindow):
 
         self.edDishSearch = QLineEdit()
         self.edDishSearch.setPlaceholderText("Начните вводить название блюда… (Enter — добавить)")
-        self.edDishSearch.textChanged.connect(self._update_pricelist_suggestions)
+        # debounce, чтобы не фильтровать на каждый символ
+        self._pricelist_search_pending_text: str = ""
+        self._pricelist_search_timer = QTimer(self)
+        self._pricelist_search_timer.setSingleShot(True)
+        self._pricelist_search_timer.setInterval(180)
+        self._pricelist_search_timer.timeout.connect(self._run_pricelist_search)
+        self.edDishSearch.textChanged.connect(self._on_pricelist_search_text_changed)
         self.edDishSearch.returnPressed.connect(self._add_pricelist_from_enter)
 
         self.lblPricelistInfo = QLabel("Введите название блюда (загрузка из iiko — автоматически)")
@@ -583,13 +1021,52 @@ class MainWindow(QMainWindow):
         self._open_iiko_products: List[Any] = []
         self._open_selected_ids: set[str] = set()
 
+        # Запланированное открытие (вариант B): сохраняем в настройках, исполняем когда наступит дата.
+        self._open_schedule_job: Optional[dict] = None
+        self._open_schedule_timer: Optional[QTimer] = None
+
         # Инфо-строка (показываем только когда есть статус/ошибка; подсказки по UI не показываем)
         self.lblTomorrowInfo = QLabel("")
         self.lblTomorrowInfo.setVisible(False)
 
+        # Календарь выбора даты открытия
+        self.calOpenDate = QCalendarWidget()
+        self.calOpenDate.setGridVisible(True)
+        self.calOpenDate.setFirstDayOfWeek(Qt.Monday)
+        # Убираем "лишний" первый столбец (номер недели), чтобы было ровно 7 колонок дней.
+        try:
+            self.calOpenDate.setVerticalHeaderFormat(QCalendarWidget.NoVerticalHeader)
+        except Exception:
+            pass
+
+        try:
+            # "квадратный" вид: фиксируем размер, чтобы не растягивался
+            self.calOpenDate.setFixedSize(320, 260)
+        except Exception:
+            pass
+
+        # Восстановим выбранную дату из настроек
+        try:
+            saved = str(self._settings.value("iiko/open_dishes/target_date", ""))
+        except Exception:
+            saved = ""
+        qd_default = QDate.currentDate().addDays(1)  # по умолчанию завтра
+        qd = QDate.fromString(saved, "yyyy-MM-dd") if saved else QDate()
+        if not qd.isValid():
+            qd = qd_default
+        self.calOpenDate.setSelectedDate(qd)
+        self.calOpenDate.selectionChanged.connect(self._on_open_target_date_changed)
+        self._update_open_action_button_label()
+
         self.edTomorrowSearch = QLineEdit()
         self.edTomorrowSearch.setPlaceholderText("Начните вводить название блюда… (Enter — добавить)")
-        self.edTomorrowSearch.textChanged.connect(self._update_open_suggestions)
+        # debounce, чтобы не фильтровать на каждый символ
+        self._open_search_pending_text: str = ""
+        self._open_search_timer = QTimer(self)
+        self._open_search_timer.setSingleShot(True)
+        self._open_search_timer.setInterval(180)
+        self._open_search_timer.timeout.connect(self._run_open_search)
+        self.edTomorrowSearch.textChanged.connect(self._on_open_search_text_changed)
         self.edTomorrowSearch.returnPressed.connect(self._add_open_from_enter)
 
         self.btnShowAllOpenDishes = QPushButton("Показать все блюда")
@@ -615,17 +1092,30 @@ class MainWindow(QMainWindow):
         self.btnClearTomorrowSelection = QPushButton("Очистить выбор")
         self.btnClearTomorrowSelection.clicked.connect(self._clear_open_selection)
 
-        tomorrow_box = QWidget(); tomorrow_layout = QVBoxLayout(tomorrow_box)
-        tomorrow_layout.addWidget(self.lblTomorrowInfo)
-        tomorrow_layout.addWidget(label_caption("Поиск блюда"))
-        tomorrow_layout.addWidget(self.edTomorrowSearch)
-        tomorrow_layout.addWidget(btns_row_open)
+        # Левая панель: календарь
+        open_left = QWidget(); open_left_layout = QVBoxLayout(open_left)
+        LayoutStyles.apply_margins(open_left_layout, LayoutStyles.NO_MARGINS)
+        open_left_layout.addWidget(label_caption("Дата открытия"))
+        open_left_layout.addWidget(self.calOpenDate)
+        open_left_layout.addStretch(1)
 
-        tomorrow_layout.addWidget(label_caption("Выбранные блюда (с галочками)"))
-        tomorrow_layout.addWidget(self.lstTomorrowSelectedDishes)
-        tomorrow_layout.addWidget(self.btnClearTomorrowSelection)
+        # Правая панель: поиск/выбор
+        open_right = QWidget(); open_right_layout = QVBoxLayout(open_right)
+        LayoutStyles.apply_margins(open_right_layout, LayoutStyles.NO_MARGINS)
+        open_right_layout.addWidget(self.lblTomorrowInfo)
+        open_right_layout.addWidget(label_caption("Поиск блюда"))
+        open_right_layout.addWidget(self.edTomorrowSearch)
+        open_right_layout.addWidget(btns_row_open)
+        open_right_layout.addWidget(label_caption("Выбранные блюда (с галочками)"))
+        open_right_layout.addWidget(self.lstTomorrowSelectedDishes)
+        open_right_layout.addWidget(self.btnClearTomorrowSelection)
 
-        self.grpTomorrowOpen = nice_group("Открыть блюда (iiko стоп-лист)", tomorrow_box)
+        open_root = QWidget(); open_root_layout = QHBoxLayout(open_root)
+        LayoutStyles.apply_margins(open_root_layout, LayoutStyles.NO_MARGINS)
+        open_root_layout.addWidget(open_left)
+        open_root_layout.addWidget(open_right, 1)
+
+        self.grpTomorrowOpen = nice_group("Открыть блюда (iiko стоп-лист)", open_root)
         self.contentLayout.addWidget(self.grpTomorrowOpen)
         self.grpTomorrowOpen.setVisible(False)
 
@@ -722,6 +1212,18 @@ class MainWindow(QMainWindow):
         # Прячем подсказки при клике вне поля поиска (как выпадающий список)
         try:
             QApplication.instance().installEventFilter(self)
+        except Exception:
+            pass
+
+        # Таймер: проверяем запланированное открытие блюд
+        try:
+            self._load_open_schedule_job()
+            self._open_schedule_timer = QTimer(self)
+            self._open_schedule_timer.setInterval(30_000)
+            self._open_schedule_timer.timeout.connect(self._check_open_schedule_due)
+            self._open_schedule_timer.start()
+            # проверим сразу после запуска
+            QTimer.singleShot(1500, self._check_open_schedule_due)
         except Exception:
             pass
 
@@ -1171,10 +1673,19 @@ class MainWindow(QMainWindow):
                 client.auth_key()
 
                 # сбросим кэши номенклатуры
+                try:
+                    self._iiko_products_load_seq = int(getattr(self, "_iiko_products_load_seq", 0)) + 1
+                except Exception:
+                    pass
+                self._iiko_products_loaded = False
                 self._iiko_products_by_key = {}
                 self._pricelist_dishes = []
                 self._open_iiko_products = []
                 self._open_selected_ids = set()
+                self._open_iiko_products_norm = []
+                self._open_iiko_products_exact = {}
+                self._pricelist_dishes_norm = []
+                self._pricelist_dishes_exact = {}
 
                 try:
                     self._settings.setValue("iiko/mode", "rest")
@@ -1253,10 +1764,19 @@ class MainWindow(QMainWindow):
                 self._iiko_biz_org_name = org_name
 
                 # сбросим кэши номенклатуры
+                try:
+                    self._iiko_products_load_seq = int(getattr(self, "_iiko_products_load_seq", 0)) + 1
+                except Exception:
+                    pass
+                self._iiko_products_loaded = False
                 self._iiko_products_by_key = {}
                 self._pricelist_dishes = []
                 self._open_iiko_products = []
                 self._open_selected_ids = set()
+                self._open_iiko_products_norm = []
+                self._open_iiko_products_exact = {}
+                self._pricelist_dishes_norm = []
+                self._pricelist_dishes_exact = {}
 
                 try:
                     self._settings.setValue("iiko/mode", "biz")
@@ -1325,10 +1845,19 @@ class MainWindow(QMainWindow):
             self._iiko_cloud_org_name = org_name
 
             # сбросим кэши номенклатуры
+            try:
+                self._iiko_products_load_seq = int(getattr(self, "_iiko_products_load_seq", 0)) + 1
+            except Exception:
+                pass
+            self._iiko_products_loaded = False
             self._iiko_products_by_key = {}
             self._pricelist_dishes = []
             self._open_iiko_products = []
             self._open_selected_ids = set()
+            self._open_iiko_products_norm = []
+            self._open_iiko_products_exact = {}
+            self._pricelist_dishes_norm = []
+            self._pricelist_dishes_exact = {}
 
             try:
                 self._settings.setValue("iiko/mode", "cloud")
@@ -1718,6 +2247,192 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _on_open_target_date_changed(self) -> None:
+        """Сохраняет выбранную дату открытия блюд."""
+        try:
+            if not hasattr(self, "calOpenDate"):
+                return
+            qd = self.calOpenDate.selectedDate()
+            if not qd.isValid():
+                return
+            try:
+                self._settings.setValue("iiko/open_dishes/target_date", qd.toString("yyyy-MM-dd"))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        try:
+            self._update_open_action_button_label()
+        except Exception:
+            pass
+
+    def _update_open_action_button_label(self) -> None:
+        """Меняет текст кнопки внизу в зависимости от выбранной даты."""
+        try:
+            if not hasattr(self, "btnOpenTomorrowChecked"):
+                return
+
+            target = date.today()
+            try:
+                if hasattr(self, "calOpenDate"):
+                    qd = self.calOpenDate.selectedDate()
+                    if qd and qd.isValid():
+                        target = date(int(qd.year()), int(qd.month()), int(qd.day()))
+            except Exception:
+                target = date.today()
+
+            today = date.today()
+            if target > today:
+                self.btnOpenTomorrowChecked.setText(f"Запланировать на {target.strftime('%d.%m.%Y')}")
+            else:
+                self.btnOpenTomorrowChecked.setText("Открыть отмеченные")
+        except Exception:
+            pass
+
+    def _load_open_schedule_job(self) -> None:
+        """Читает запланированное открытие блюд из настроек."""
+        self._open_schedule_job = None
+        try:
+            raw = self._settings.value("iiko/open_dishes/schedule", "")
+            raw_s = str(raw) if raw is not None else ""
+            if not raw_s:
+                return
+            job = json.loads(raw_s)
+            if isinstance(job, dict):
+                self._open_schedule_job = job
+        except Exception:
+            self._open_schedule_job = None
+
+    def _save_open_schedule_job(self, job: Optional[dict]) -> None:
+        """Сохраняет/очищает запланированное открытие блюд."""
+        self._open_schedule_job = job
+        try:
+            if job is None:
+                self._settings.remove("iiko/open_dishes/schedule")
+                return
+            self._settings.setValue("iiko/open_dishes/schedule", json.dumps(job, ensure_ascii=False))
+        except Exception:
+            pass
+
+    def _format_open_schedule_status(self) -> str:
+        job = self._open_schedule_job
+        if not isinstance(job, dict):
+            return ""
+
+        state = (job.get("state") or "pending").strip().lower()
+        run_at = str(job.get("run_at") or "")
+        try:
+            dt = datetime.fromisoformat(run_at)
+            when = dt.strftime("%d.%m.%Y %H:%M")
+        except Exception:
+            when = run_at
+
+        if state == "failed":
+            err = (job.get("last_error") or "")
+            err_short = (str(err).strip()[:120])
+            return f"Запланированное открытие НЕ выполнено ({when}). {err_short}"
+
+        if state == "done":
+            return ""
+
+        # pending
+        return f"Запланировано открытие: {when}"
+
+    def _check_open_schedule_due(self, silent: bool = False) -> None:
+        """Если наступила дата/время — выполняет запланированное открытие блюд."""
+        # Лок защищает от двойного запуска (если открыт GUI + параллельно сработал schtasks)
+        lock = QLockFile(_open_schedule_lock_path())
+        try:
+            lock.setStaleLockTime(10 * 60 * 1000)
+        except Exception:
+            pass
+
+        if not lock.tryLock(0):
+            return
+
+        try:
+            # обновим из настроек (если запускали в другом месте)
+            if self._open_schedule_job is None:
+                self._load_open_schedule_job()
+
+            job = self._open_schedule_job
+            if not isinstance(job, dict):
+                _windows_delete_open_schedule_task()
+                return
+
+            state = (job.get("state") or "pending").strip().lower()
+            if state in ("done", "failed"):
+                _windows_delete_open_schedule_task()
+                return
+
+            run_at = str(job.get("run_at") or "")
+            try:
+                dt_run = datetime.fromisoformat(run_at)
+            except Exception:
+                return
+
+            now = datetime.now()
+            if now < dt_run:
+                # можем показать статус, если открыта вкладка
+                try:
+                    if hasattr(self, "grpTomorrowOpen") and self.grpTomorrowOpen.isVisible():
+                        self._set_tomorrow_info(self._format_open_schedule_status())
+                except Exception:
+                    pass
+                return
+
+            product_ids = job.get("product_ids") or []
+            if not isinstance(product_ids, list) or not product_ids:
+                # нечего выполнять
+                self._save_open_schedule_job(None)
+                _windows_delete_open_schedule_task()
+                return
+
+            # выполняем один раз
+            ok = 0
+            for pid in product_ids:
+                pid_s = str(pid).strip()
+                if not pid_s:
+                    continue
+                self._open_stoplist_product_id(pid_s)
+                ok += 1
+
+            # успех -> очищаем расписание
+            self._save_open_schedule_job(None)
+            _windows_delete_open_schedule_task()
+
+            if not silent:
+                try:
+                    QMessageBox.information(self, "iiko", f"Запланированное открытие выполнено. Открыто блюд: {ok}.")
+                except Exception:
+                    pass
+
+        except IikoApiError as e:
+            # пометим как failed, чтобы не спамить попытками
+            job = self._open_schedule_job or {}
+            if isinstance(job, dict):
+                job["state"] = "failed"
+                job["last_error"] = str(e)
+                try:
+                    job["failed_at"] = datetime.now().isoformat(timespec="seconds")
+                except Exception:
+                    pass
+                self._save_open_schedule_job(job)
+            _windows_delete_open_schedule_task()
+            if not silent:
+                try:
+                    QMessageBox.critical(self, "iiko", f"Не удалось выполнить запланированное открытие: {e}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        finally:
+            try:
+                lock.unlock()
+            except Exception:
+                pass
+
     def _set_pricelist_suggestions_visible(self, visible: bool) -> None:
         """Показать/скрыть выпадающий список блюд для "Ценники" (popup)."""
         try:
@@ -1906,18 +2621,27 @@ class MainWindow(QMainWindow):
 
             # Сброс состояния
             try:
-                self._hide_pricelist_suggestions()
+                self._open_selected_ids = set()
             except Exception:
                 pass
-            self._tomorrow_menu_dishes = []
-            self._open_selected_ids = set()
-            self.edTomorrowSearch.clear()
-            self.lstTomorrowDishes.clear()
+            try:
+                self.edTomorrowSearch.clear()
+            except Exception:
+                pass
+            try:
+                self.lstTomorrowDishes.clear()
+            except Exception:
+                pass
             self._hide_open_suggestions()
             if hasattr(self, "lstTomorrowSelectedDishes"):
                 self.lstTomorrowSelectedDishes.clear()
 
-            self._set_tomorrow_info("")
+            # Покажем статус расписания (если есть)
+            self._set_tomorrow_info(self._format_open_schedule_status())
+            try:
+                self._update_open_action_button_label()
+            except Exception:
+                pass
 
             try:
                 self.edTomorrowSearch.setFocus()
@@ -2289,6 +3013,278 @@ class MainWindow(QMainWindow):
             and (self._iiko_pass_sha1_cached or "").strip()
         )
 
+    def _iiko_products_snapshot(self) -> dict:
+        """Снимок настроек авторизации iiko для фонового воркера."""
+        mode = (self._iiko_mode or "cloud").strip().lower()
+        snap: dict[str, Any] = {"mode": mode}
+
+        if mode in ("cloud", "cloud_v1", "cloudv1", "v1"):
+            snap["cloud_api_url"] = (self._iiko_cloud_api_url or "").strip() or "https://api-ru.iiko.services"
+            snap["cloud_api_login"] = (self._iiko_cloud_api_login or "").strip()
+            snap["cloud_org_id"] = (self._iiko_cloud_org_id or "").strip()
+            snap["cloud_access_token"] = (self._iiko_cloud_access_token or "").strip()
+            return snap
+
+        if mode in ("biz", "transport", "iikobiz", "iiko.biz"):
+            snap["biz_api_url"] = (self._iiko_biz_api_url or "").strip() or "https://iiko.biz:9900"
+            snap["biz_user_id"] = (self._iiko_biz_user_id or "").strip()
+            snap["biz_user_secret"] = (self._iiko_biz_user_secret or "").strip()
+            snap["biz_org_id"] = (self._iiko_biz_org_id or "").strip()
+            snap["biz_access_token"] = (self._iiko_biz_access_token or "").strip()
+            return snap
+
+        # REST (/resto)
+        if not (self._iiko_pass_sha1_cached or "").strip():
+            if not self._ensure_iiko_pass_sha1():
+                raise IikoApiError("Не задан SHA1-хэш пароля для REST. Нажмите 'Авторизация точки'.")
+
+        snap["rest_base_url"] = (self._iiko_base_url or "").strip()
+        snap["rest_login"] = (self._iiko_login or "").strip()
+        snap["rest_pass_sha1"] = (self._iiko_pass_sha1_cached or "").strip()
+        return snap
+
+    def _set_iiko_load_status(self, origin: str, text: str) -> None:
+        """Показывает статус загрузки iiko в нужной части UI."""
+        try:
+            if origin in ("pricelist", "both"):
+                if hasattr(self, "lblPricelistInfo"):
+                    self.lblPricelistInfo.setText(text)
+        except Exception:
+            pass
+
+        try:
+            if origin in ("open", "both"):
+                self._set_tomorrow_info(text)
+        except Exception:
+            pass
+
+    def _start_iiko_products_load(self, origin: str, user_initiated: bool = False) -> None:
+        """Запускает загрузку блюд iiko в фоне (QThread), чтобы UI не зависал."""
+        if getattr(self, "_iiko_products_loading", False):
+            return
+
+        self._iiko_products_loading = True
+        self._iiko_products_load_origin = str(origin or "")
+        self._iiko_products_load_user_initiated = bool(user_initiated)
+
+        self._iiko_products_load_seq = int(getattr(self, "_iiko_products_load_seq", 0)) + 1
+        seq = int(self._iiko_products_load_seq)
+
+        # статус
+        self._set_iiko_load_status(origin, "Загружаю блюда из iiko…")
+
+        try:
+            snapshot = self._iiko_products_snapshot()
+        except Exception as e:
+            self._iiko_products_loading = False
+            self._set_iiko_load_status(origin, f"Ошибка загрузки iiko: {e}")
+            if user_initiated:
+                try:
+                    QMessageBox.critical(self, "iiko", str(e))
+                except Exception:
+                    pass
+            return
+
+        thread = QThread(self)
+        worker = IikoProductsLoadWorker(seq, snapshot)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_iiko_products_loaded)
+        worker.failed.connect(self._on_iiko_products_load_failed)
+
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        self._iiko_products_load_thread = thread
+        self._iiko_products_load_worker = worker
+
+        thread.start()
+
+    def _ensure_iiko_products_loaded_async(self, origin: str, user_initiated: bool = False) -> bool:
+        """Гарантирует, что номенклатура загружается/загружена.
+
+        Возвращает True если уже загружено, иначе False.
+        """
+        try:
+            if getattr(self, "_iiko_products_loaded", False):
+                return True
+
+            if getattr(self, "_iiko_products_loading", False):
+                # уже грузим — просто выходим
+                self._set_iiko_load_status(origin, "Загружаю блюда из iiko…")
+                return False
+
+            if not self._can_autoload_iiko_products():
+                self._set_iiko_load_status(
+                    origin,
+                    "Список блюд не загружен. Нажмите «Авторизация точки» и попробуйте снова.",
+                )
+                return False
+
+            self._start_iiko_products_load(origin=origin, user_initiated=user_initiated)
+            return False
+        except Exception as e:
+            self._set_iiko_load_status(origin, f"Ошибка загрузки iiko: {e}")
+            return False
+
+    def _on_iiko_products_loaded(self, seq: int, result: object) -> None:
+        """Применяет загруженную номенклатуру к UI (в главном потоке)."""
+        try:
+            self._iiko_products_loading = False
+
+            # сброс ссылок (поток/воркер сами удалятся через deleteLater)
+            self._iiko_products_load_thread = None
+            self._iiko_products_load_worker = None
+
+            # если это устаревший результат — не применяем
+            if int(seq) != int(getattr(self, "_iiko_products_load_seq", 0)):
+                return
+
+            if not isinstance(result, dict):
+                raise IikoApiError("Некорректный результат загрузки номенклатуры.")
+
+            products = list(result.get("products") or [])
+            self._open_iiko_products = products
+            self._pricelist_dishes = list(result.get("pricelist_dishes") or [])
+
+            self._open_iiko_products_norm = list(result.get("open_norm") or [])
+            self._open_iiko_products_exact = dict(result.get("open_exact") or {})
+
+            self._pricelist_dishes_norm = list(result.get("pricelist_norm") or [])
+            self._pricelist_dishes_exact = dict(result.get("pricelist_exact") or {})
+
+            self._iiko_products_loaded = True
+
+            # если воркер обновил токен (iikoTransport) — сохраним
+            try:
+                new_tok = (result.get("biz_new_token") or "").strip()
+            except Exception:
+                new_tok = ""
+            if new_tok:
+                try:
+                    self._iiko_biz_access_token = new_tok
+                    self._settings.setValue("iiko/biz/access_token", new_tok)
+                except Exception:
+                    pass
+
+            # обновляем UI по отложенным флагам/тексту
+            try:
+                if getattr(self, "_pricelist_show_all_requested", False):
+                    self._pricelist_show_all_requested = False
+                    self._show_all_pricelist_dishes()
+                else:
+                    self._run_pricelist_search()
+            except Exception:
+                pass
+
+            try:
+                if getattr(self, "_open_show_all_requested", False):
+                    self._open_show_all_requested = False
+                    self._show_all_open_dishes()
+                else:
+                    self._run_open_search()
+            except Exception:
+                pass
+
+            # если ничего не ищем — просто покажем "загружено"
+            try:
+                if hasattr(self, "grpPricelist") and self.grpPricelist.isVisible():
+                    if len((self.edDishSearch.text() or "").strip()) < 2 and not self.lstDishSuggestions.isVisible():
+                        self.lblPricelistInfo.setText(f"Загружено из iiko: {len(self._pricelist_dishes)}")
+            except Exception:
+                pass
+
+            try:
+                if hasattr(self, "grpTomorrowOpen") and self.grpTomorrowOpen.isVisible():
+                    if len((self.edTomorrowSearch.text() or "").strip()) < 2 and not self.lstTomorrowDishes.isVisible():
+                        self._set_tomorrow_info(self._format_open_schedule_status())
+            except Exception:
+                pass
+
+        except Exception as e:
+            self._on_iiko_products_load_failed(int(seq), str(e))
+
+    def _on_iiko_products_load_failed(self, seq: int, error: str) -> None:
+        try:
+            self._iiko_products_loading = False
+            self._iiko_products_load_thread = None
+            self._iiko_products_load_worker = None
+
+            # устаревший результат
+            if int(seq) != int(getattr(self, "_iiko_products_load_seq", 0)):
+                return
+
+            origin = str(getattr(self, "_iiko_products_load_origin", "") or "")
+            if origin not in ("open", "pricelist", "both"):
+                origin = "both"
+
+            msg = (error or "").strip() or "Ошибка загрузки iiko"
+            self._set_iiko_load_status(origin, f"Ошибка загрузки iiko: {msg}")
+
+            if bool(getattr(self, "_iiko_products_load_user_initiated", False)):
+                try:
+                    QMessageBox.critical(self, "iiko", msg)
+                except Exception:
+                    pass
+
+        except Exception:
+            pass
+
+    def _on_pricelist_search_text_changed(self, text: str) -> None:
+        self._pricelist_search_pending_text = text or ""
+        if len((text or "").strip()) < 2:
+            try:
+                self._hide_pricelist_suggestions()
+            except Exception:
+                pass
+
+            # обновим строку статуса, чтобы не оставалось "Найдено..."
+            try:
+                if getattr(self, "_iiko_products_loaded", False):
+                    self.lblPricelistInfo.setText(f"Загружено из iiko: {len(self._pricelist_dishes)}")
+                else:
+                    self.lblPricelistInfo.setText("Введите название блюда (загрузка из iiko — автоматически)")
+            except Exception:
+                pass
+            return
+
+        try:
+            self._pricelist_search_timer.start()
+        except Exception:
+            pass
+
+    def _run_pricelist_search(self) -> None:
+        try:
+            self._update_pricelist_suggestions(self._pricelist_search_pending_text)
+        except Exception:
+            pass
+
+    def _on_open_search_text_changed(self, text: str) -> None:
+        self._open_search_pending_text = text or ""
+        if len((text or "").strip()) < 2:
+            try:
+                self._hide_open_suggestions()
+                # вернём статус расписания, если есть
+                self._set_tomorrow_info(self._format_open_schedule_status())
+            except Exception:
+                pass
+            return
+        try:
+            self._open_search_timer.start()
+        except Exception:
+            pass
+
+    def _run_open_search(self) -> None:
+        try:
+            self._update_open_suggestions(self._open_search_pending_text)
+        except Exception:
+            pass
+
     def _get_iiko_products(self) -> List[Any]:
         """Возвращает список продуктов iiko в зависимости от выбранного режима.
 
@@ -2433,34 +3429,48 @@ class MainWindow(QMainWindow):
         return " — ".join([x for x in parts if x])
 
     def _load_open_iiko_products(self) -> None:
-        products = self._get_iiko_products()
-        self._open_iiko_products = list(products or [])
-        # как на вкладке ценников: после автозагрузки сразу обновим подсказки
+        """Ручной запуск загрузки блюд iiko для вкладки "Открыть блюда" (в фоне)."""
         try:
-            self._update_open_suggestions(self.edTomorrowSearch.text())
+            if getattr(self, "_iiko_products_loaded", False):
+                # уже есть — просто обновим подсказки
+                try:
+                    self._run_open_search()
+                except Exception:
+                    pass
+                return
+            self._ensure_iiko_products_loaded_async(origin="open", user_initiated=True)
         except Exception:
             pass
 
     def _show_all_open_dishes(self):
         """Показывает подсказки без фильтра (с ограничением по количеству)."""
         try:
-            if not self._open_iiko_products:
-                if not self._can_autoload_iiko_products():
-                    QMessageBox.warning(self, "iiko", "Сначала нажмите 'Авторизация точки'.")
-                    return
-                self._set_tomorrow_info("Загружаю блюда из iiko…")
-                self._load_open_iiko_products()
-
-            self.lstTomorrowDishes.clear()
-            if not self._open_iiko_products:
-                self._set_tomorrow_info("Список блюд пуст")
+            # если ещё не загружено — запускаем в фоне и запоминаем, что хотели показать все
+            if not getattr(self, "_iiko_products_loaded", False):
+                self._open_show_all_requested = True
+                self._ensure_iiko_products_loaded_async(origin="open", user_initiated=True)
                 return
 
-            limit = 500
-            for p in self._open_iiko_products[:limit]:
-                item = QListWidgetItem(self._format_iiko_product_line(p))
-                item.setData(Qt.UserRole, p)
-                self.lstTomorrowDishes.addItem(item)
+            if getattr(self, "_iiko_products_loading", False):
+                self._open_show_all_requested = True
+                self._set_tomorrow_info("Загружаю блюда из iiko…")
+                return
+
+            self.lstTomorrowDishes.setUpdatesEnabled(False)
+            try:
+                self.lstTomorrowDishes.clear()
+                if not self._open_iiko_products:
+                    self._set_tomorrow_info("Список блюд пуст")
+                    self._hide_open_suggestions()
+                    return
+
+                limit = 500
+                for p in self._open_iiko_products[:limit]:
+                    item = QListWidgetItem(self._format_iiko_product_line(p))
+                    item.setData(Qt.UserRole, p)
+                    self.lstTomorrowDishes.addItem(item)
+            finally:
+                self.lstTomorrowDishes.setUpdatesEnabled(True)
 
             self._set_open_suggestions_visible(self.lstTomorrowDishes.count() > 0)
 
@@ -2472,45 +3482,50 @@ class MainWindow(QMainWindow):
             else:
                 self._set_tomorrow_info(f"Загружено из iiko: {len(self._open_iiko_products)}")
 
-        except IikoApiError as e:
-            QMessageBox.critical(self, "iiko", str(e))
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
     def _update_open_suggestions(self, text: str):
-        """Обновляет подсказки по вводу (как на вкладке ценников)."""
-        self.lstTomorrowDishes.clear()
+        """Обновляет подсказки по вводу (вкладка "Открыть блюда")."""
+        try:
+            self.lstTomorrowDishes.clear()
+        except Exception:
+            pass
 
         q = (text or "").strip().lower().replace("ё", "е")
         if len(q) < 2:
             self._hide_open_suggestions()
-            return
-
-        # Автозагрузка номенклатуры при первом поиске
-        if (not self._open_iiko_products) and self._can_autoload_iiko_products():
+            # вернём статус расписания, чтобы не висело "Загружаю…"
             try:
-                self._set_tomorrow_info("Загружаю блюда из iiko…")
-                self._load_open_iiko_products()
+                self._set_tomorrow_info(self._format_open_schedule_status())
             except Exception:
                 pass
             return
 
-        if not self._open_iiko_products:
-            self._set_tomorrow_info(
-                "Список блюд не загружен. Нажмите «Авторизация точки» и попробуйте снова."
-            )
+        # если ещё не загружено — запускаем фоновую загрузку
+        if not getattr(self, "_iiko_products_loaded", False):
+            self._set_tomorrow_info("Загружаю блюда из iiko…")
+            self._ensure_iiko_products_loaded_async(origin="open", user_initiated=False)
+            return
+
+        if not self._open_iiko_products_norm:
+            self._hide_open_suggestions()
+            self._set_tomorrow_info("Список блюд пуст")
             return
 
         shown = 0
-        for p in self._open_iiko_products:
-            name_norm = (getattr(p, "name", "") or "").lower().replace("ё", "е")
-            if q in name_norm:
-                item = QListWidgetItem(self._format_iiko_product_line(p))
-                item.setData(Qt.UserRole, p)
-                self.lstTomorrowDishes.addItem(item)
-                shown += 1
-                if shown >= 30:
-                    break
+        self.lstTomorrowDishes.setUpdatesEnabled(False)
+        try:
+            for name_norm, p in self._open_iiko_products_norm:
+                if q in name_norm:
+                    item = QListWidgetItem(self._format_iiko_product_line(p))
+                    item.setData(Qt.UserRole, p)
+                    self.lstTomorrowDishes.addItem(item)
+                    shown += 1
+                    if shown >= 30:
+                        break
+        finally:
+            self.lstTomorrowDishes.setUpdatesEnabled(True)
 
         if shown:
             self._set_open_suggestions_visible(True)
@@ -2551,28 +3566,35 @@ class MainWindow(QMainWindow):
     def _add_open_from_enter(self):
         """Enter в поле поиска: добавляем точное совпадение или первый пункт из подсказок."""
         try:
-            if not self._open_iiko_products:
-                try:
-                    self._set_tomorrow_info("Загружаю блюда из iiko…")
-                    self._load_open_iiko_products()
-                except Exception:
-                    pass
-                if not self._open_iiko_products:
-                    return
-
             q_raw = (self.edTomorrowSearch.text() or "").strip()
             if not q_raw:
                 return
+
+            # если ещё не загружено — запускаем загрузку в фоне
+            if not getattr(self, "_iiko_products_loaded", False):
+                self._set_tomorrow_info("Загружаю блюда из iiko…")
+                self._ensure_iiko_products_loaded_async(origin="open", user_initiated=False)
+                return
+
             q = self._pl_key(q_raw)
 
-            # 1) точное совпадение по названию
-            for p in self._open_iiko_products:
-                if self._pl_key(getattr(p, "name", "")) == q:
-                    self._add_open_selected(p)
-                    self._hide_open_suggestions()
-                    return
+            # 1) точное совпадение по названию (O(1) через индекс)
+            p = None
+            try:
+                p = self._open_iiko_products_exact.get(q)
+            except Exception:
+                p = None
+            if p is not None:
+                self._add_open_selected(p)
+                self._hide_open_suggestions()
+                return
 
-            # 2) иначе — первый элемент подсказок
+            # 2) иначе — первый элемент подсказок (обновим подсказки по текущему тексту)
+            try:
+                self._update_open_suggestions(q_raw)
+            except Exception:
+                pass
+
             if self.lstTomorrowDishes.count() > 0:
                 it = self.lstTomorrowDishes.item(0)
                 p = it.data(Qt.UserRole)
@@ -2668,14 +3690,11 @@ class MainWindow(QMainWindow):
             show = (not q) or (q in self._pl_key(base_name))
             it.setHidden(not show)
 
-    def _open_one_tomorrow_item(self, it: QListWidgetItem) -> bool:
-        """Снять блюдо со стоп-листа.
-
-        Реализация: через iikoRMS REST (/resto).
-        """
-        pid = (it.data(Qt.UserRole) or "").strip()
+    def _open_stoplist_product_id(self, pid: str) -> None:
+        """Снять блюдо со стоп-листа по product_id (REST /resto)."""
+        pid = (pid or "").strip()
         if not pid:
-            return False
+            raise IikoApiError("Не задан product_id.")
 
         mode = (self._iiko_mode or "cloud").strip().lower()
         if mode not in ("rest", "rms", "resto"):
@@ -2696,6 +3715,17 @@ class MainWindow(QMainWindow):
 
         client = IikoRmsClient(base_url=base_url, login=login, pass_sha1=pass_sha1)
         client.open_product_from_stoplist(pid)
+
+    def _open_one_tomorrow_item(self, it: QListWidgetItem) -> bool:
+        """Снять блюдо со стоп-листа.
+
+        Реализация: через iikoRMS REST (/resto).
+        """
+        pid = (it.data(Qt.UserRole) or "").strip()
+        if not pid:
+            return False
+
+        self._open_stoplist_product_id(pid)
         return True
 
     def _on_tomorrow_item_changed(self, item: QListWidgetItem):
@@ -2748,18 +3778,113 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", str(e))
 
     def _open_tomorrow_checked(self):
-        """Открывает (снимает со стоп-листа) отмеченные блюда из списка выбранных."""
+        """Открывает (снимает со стоп-листа) отмеченные блюда.
+
+        Если выбрана дата в будущем — планирует открытие на эту дату (вариант B).
+        """
         try:
             if not hasattr(self, "lstTomorrowSelectedDishes"):
                 return
 
-            any_done = False
+            # собираем выбранные блюда
+            items: List[QListWidgetItem] = []
+            product_ids: List[str] = []
+            titles: List[str] = []
             for i in range(self.lstTomorrowSelectedDishes.count()):
                 it = self.lstTomorrowSelectedDishes.item(i)
                 if it.checkState() != Qt.Checked:
                     continue
                 if it.data(Qt.UserRole + 1) == "opened":
                     continue
+                pid = (it.data(Qt.UserRole) or "").strip()
+                if not pid:
+                    continue
+                items.append(it)
+                product_ids.append(pid)
+                titles.append(str(it.data(Qt.UserRole + 2) or it.text() or "").strip())
+
+            if not product_ids:
+                QMessageBox.information(self, "Нет выбора", "Отметьте блюда галочками, которые нужно открыть.")
+                return
+
+            # выбранная дата
+            qd = None
+            try:
+                if hasattr(self, "calOpenDate"):
+                    qd = self.calOpenDate.selectedDate()
+            except Exception:
+                qd = None
+
+            if qd is None or (hasattr(qd, "isValid") and not qd.isValid()):
+                target = date.today()
+            else:
+                target = date(int(qd.year()), int(qd.month()), int(qd.day()))
+
+            today = date.today()
+
+            # будущее: планируем
+            if target > today:
+                # если уже есть pending-расписание — спросим, заменять ли
+                if isinstance(self._open_schedule_job, dict) and (self._open_schedule_job.get("state") or "pending").lower() == "pending":
+                    msg = QMessageBox(self)
+                    msg.setWindowTitle("iiko")
+                    msg.setText("Уже есть запланированное открытие.")
+                    msg.setInformativeText("Заменить его новым списком?")
+                    btn_replace = msg.addButton("Заменить", QMessageBox.DestructiveRole)
+                    btn_cancel = msg.addButton("Отмена", QMessageBox.RejectRole)
+                    msg.exec()
+                    if msg.clickedButton() != btn_replace:
+                        return
+
+                run_at = datetime.combine(target, time(0, 1))
+                job = {
+                    "state": "pending",
+                    "run_at": run_at.isoformat(timespec="seconds"),
+                    "product_ids": product_ids,
+                    "titles": titles,
+                    "created_at": datetime.now().isoformat(timespec="seconds"),
+                }
+                self._save_open_schedule_job(job)
+
+                # Пытаемся создать задачу Планировщика Windows, чтобы сработало даже если приложение закрыто.
+                sched_ok = False
+                sched_err = ""
+                try:
+                    sched_ok, sched_err = _windows_create_open_schedule_task(run_at)
+                except Exception as e:
+                    sched_ok, sched_err = False, str(e)
+
+                if sched_ok:
+                    task_name = ""
+                    try:
+                        task_name = _open_schedule_task_name()
+                    except Exception:
+                        task_name = ""
+
+                    info = (
+                        f"Запланировано на {target.strftime('%d.%m.%Y')} (00:01).\n"
+                        "Сработает автоматически (Планировщик Windows).\n"
+                        + (f"Задача: {task_name}\n" if task_name else "")
+                        + "Компьютер должен быть включён."
+                    )
+                else:
+                    info = (
+                        f"Запланировано на {target.strftime('%d.%m.%Y')} (00:01).\n"
+                        "Не удалось создать задачу Планировщика Windows — откроется при следующем запуске приложения после наступления времени.\n"
+                        f"Причина: {sched_err}"
+                    )
+
+                self._set_tomorrow_info(self._format_open_schedule_status())
+                QMessageBox.information(self, "Запланировано", info)
+                return
+
+            if target < today:
+                QMessageBox.warning(self, "Дата", "Вы выбрали дату в прошлом.")
+                return
+
+            # сегодня: открываем сейчас
+            any_done = False
+            for it in items:
                 try:
                     self._open_one_tomorrow_item(it)
                     it.setData(Qt.UserRole + 1, "opened")
@@ -2792,42 +3917,54 @@ class MainWindow(QMainWindow):
         return " — ".join(parts)
 
     def _load_pricelist_dishes(self):
+        """Ручной запуск загрузки блюд iiko для вкладки "Ценники" (в фоне)."""
         try:
-            products = self._get_iiko_products()
+            if getattr(self, "_iiko_products_loaded", False):
+                try:
+                    self.lblPricelistInfo.setText(f"Загружено из iiko: {len(self._pricelist_dishes)}")
+                except Exception:
+                    pass
+                try:
+                    self._run_pricelist_search()
+                except Exception:
+                    pass
+                return
 
-            dishes = [DishItem(name=p.name, weight=p.weight, price=p.price) for p in products]
-            self._pricelist_dishes = dishes
-            self.lblPricelistInfo.setText(f"Загружено из iiko: {len(dishes)}")
-            # Поле ввода скрыто — подсказки обновляем только если текст введён программно
-            try:
-                self._update_pricelist_suggestions(self.edDishSearch.text())
-            except Exception:
-                pass
-        except IikoApiError as e:
-            QMessageBox.critical(self, "iiko", str(e))
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", str(e))
+            self._ensure_iiko_products_loaded_async(origin="pricelist", user_initiated=True)
+        except Exception:
+            pass
 
     def _show_all_pricelist_dishes(self):
         """Показывает список блюд без фильтра (с ограничением по количеству)."""
         try:
-            if not self._pricelist_dishes:
-                if not self._can_autoload_iiko_products():
-                    QMessageBox.warning(self, "iiko", "Сначала нажмите 'Авторизация точки'.")
-                    return
-                self._load_pricelist_dishes()
-
-            self.lstDishSuggestions.clear()
-            if not self._pricelist_dishes:
-                self._hide_pricelist_suggestions()
+            # если ещё не загружено — запускаем в фоне и запоминаем, что хотели показать все
+            if not getattr(self, "_iiko_products_loaded", False):
+                self._pricelist_show_all_requested = True
+                self._ensure_iiko_products_loaded_async(origin="pricelist", user_initiated=True)
                 return
 
-            # Чтобы UI не зависал на огромной номенклатуре
-            limit = 500
-            for d in self._pricelist_dishes[:limit]:
-                item = QListWidgetItem(self._format_dish_line(d))
-                item.setData(Qt.UserRole, d)
-                self.lstDishSuggestions.addItem(item)
+            if getattr(self, "_iiko_products_loading", False):
+                self._pricelist_show_all_requested = True
+                try:
+                    self.lblPricelistInfo.setText("Загружаю блюда из iiko…")
+                except Exception:
+                    pass
+                return
+
+            self.lstDishSuggestions.setUpdatesEnabled(False)
+            try:
+                self.lstDishSuggestions.clear()
+                if not self._pricelist_dishes:
+                    self._hide_pricelist_suggestions()
+                    return
+
+                limit = 500
+                for d in self._pricelist_dishes[:limit]:
+                    item = QListWidgetItem(self._format_dish_line(d))
+                    item.setData(Qt.UserRole, d)
+                    self.lstDishSuggestions.addItem(item)
+            finally:
+                self.lstDishSuggestions.setUpdatesEnabled(True)
 
             self._set_pricelist_suggestions_visible(self.lstDishSuggestions.count() > 0)
 
@@ -2838,45 +3975,53 @@ class MainWindow(QMainWindow):
             else:
                 self.lblPricelistInfo.setText(f"Загружено из iiko: {len(self._pricelist_dishes)}")
 
-        except IikoApiError as e:
-            QMessageBox.critical(self, "iiko", str(e))
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
     def _update_pricelist_suggestions(self, text: str):
-        self.lstDishSuggestions.clear()
+        try:
+            self.lstDishSuggestions.clear()
+        except Exception:
+            pass
 
         q = (text or "").strip().lower().replace('ё', 'е')
         if len(q) < 2:
             self._hide_pricelist_suggestions()
-            return
-
-        # Автозагрузка подсказок: если авторизация точки уже сделана.
-        # Важно: если загрузили — _load_pricelist_dishes() сам обновит подсказки.
-        if (not self._pricelist_dishes) and self._can_autoload_iiko_products():
+            # чтобы не оставалось "Загружаю…"
             try:
-                self.lblPricelistInfo.setText("Загружаю блюда из iiko…")
-                self._load_pricelist_dishes()
+                if getattr(self, "_iiko_products_loaded", False):
+                    self.lblPricelistInfo.setText(f"Загружено из iiko: {len(self._pricelist_dishes)}")
             except Exception:
                 pass
             return
 
-        if not self._pricelist_dishes:
-            self.lblPricelistInfo.setText(
-                "Список блюд не загружен. Нажмите «Авторизация точки» и попробуйте снова."
-            )
+        # если ещё не загружено — запускаем фоновую загрузку
+        if not getattr(self, "_iiko_products_loaded", False):
+            try:
+                self.lblPricelistInfo.setText("Загружаю блюда из iiko…")
+            except Exception:
+                pass
+            self._ensure_iiko_products_loaded_async(origin="pricelist", user_initiated=False)
+            return
+
+        if not self._pricelist_dishes_norm:
+            self._hide_pricelist_suggestions()
+            self.lblPricelistInfo.setText("Список блюд пуст")
             return
 
         shown = 0
-        for d in self._pricelist_dishes:
-            name_norm = d.name.lower().replace('ё', 'е')
-            if q in name_norm:
-                item = QListWidgetItem(self._format_dish_line(d))
-                item.setData(Qt.UserRole, d)
-                self.lstDishSuggestions.addItem(item)
-                shown += 1
-                if shown >= 30:
-                    break
+        self.lstDishSuggestions.setUpdatesEnabled(False)
+        try:
+            for name_norm, d in self._pricelist_dishes_norm:
+                if q in name_norm:
+                    item = QListWidgetItem(self._format_dish_line(d))
+                    item.setData(Qt.UserRole, d)
+                    self.lstDishSuggestions.addItem(item)
+                    shown += 1
+                    if shown >= 30:
+                        break
+        finally:
+            self.lstDishSuggestions.setUpdatesEnabled(True)
 
         if shown:
             self._set_pricelist_suggestions_visible(True)
@@ -2911,34 +4056,43 @@ class MainWindow(QMainWindow):
     def _add_pricelist_from_enter(self):
         """Enter в поле поиска: добавляем точное совпадение или первый пункт из подсказок."""
         try:
-            # Если список ещё не загружен — пробуем загрузить автоматически.
-            if not self._pricelist_dishes:
-                try:
-                    self.lblPricelistInfo.setText("Загружаю блюда из iiko…")
-                    self._load_pricelist_dishes()
-                except Exception:
-                    pass
-                if not self._pricelist_dishes:
-                    return
-
             q_raw = (self.edDishSearch.text() or "").strip()
             if not q_raw:
                 return
+
+            # если ещё не загружено — запускаем загрузку в фоне
+            if not getattr(self, "_iiko_products_loaded", False):
+                try:
+                    self.lblPricelistInfo.setText("Загружаю блюда из iiko…")
+                except Exception:
+                    pass
+                self._ensure_iiko_products_loaded_async(origin="pricelist", user_initiated=False)
+                return
+
             q = self._pl_key(q_raw)
 
-            # 1) точное совпадение по названию
-            for d in self._pricelist_dishes:
-                if self._pl_key(d.name) == q:
-                    self._add_pricelist_selected(d)
-                    self._hide_pricelist_suggestions()
-                    return
+            # 1) точное совпадение по названию (O(1) через индекс)
+            d = None
+            try:
+                d = self._pricelist_dishes_exact.get(q)
+            except Exception:
+                d = None
+            if isinstance(d, DishItem):
+                self._add_pricelist_selected(d)
+                self._hide_pricelist_suggestions()
+                return
 
             # 2) иначе — первый элемент подсказок
+            try:
+                self._update_pricelist_suggestions(q_raw)
+            except Exception:
+                pass
+
             if self.lstDishSuggestions.count() > 0:
                 it = self.lstDishSuggestions.item(0)
-                d = it.data(Qt.UserRole)
-                if isinstance(d, DishItem):
-                    self._add_pricelist_selected(d)
+                d2 = it.data(Qt.UserRole)
+                if isinstance(d2, DishItem):
+                    self._add_pricelist_selected(d2)
                     self._hide_pricelist_suggestions()
                     return
 
@@ -2986,6 +4140,18 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    # Режим для Планировщика Windows: выполнить расписание и выйти
+    if "--run-open-schedule" in sys.argv:
+        try:
+            QCoreApplication(sys.argv)
+        except Exception:
+            pass
+        try:
+            run_open_schedule_due_silent()
+        except Exception:
+            pass
+        return
+
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
