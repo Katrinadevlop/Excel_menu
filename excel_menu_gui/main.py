@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 from urllib.parse import urlsplit, parse_qsl
 
-from PySide6.QtCore import Qt, QMimeData, QSize, QUrl, QSettings
-from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QBrush, QLinearGradient, QFont, QDesktopServices
+from PySide6.QtCore import Qt, QMimeData, QSize, QUrl, QSettings, QEvent, QPoint
+from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QBrush, QLinearGradient, QFont, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QBoxLayout,
     QLabel, QPushButton, QFileDialog, QTextEdit, QComboBox, QLineEdit,
@@ -237,6 +237,8 @@ class MainWindow(QMainWindow):
         try:
             self._iiko_products_by_key = {}
             self._pricelist_dishes = []
+            self._open_iiko_products = []
+            self._open_selected_ids = set()
         except Exception:
             pass
 
@@ -571,34 +573,61 @@ class MainWindow(QMainWindow):
         self.contentLayout.addWidget(self.grpPricelist)
         self.grpPricelist.setVisible(False)
 
-        # ===== ОТКРЫТИЕ БЛЮД НА ЗАВТРА (из Excel -> снять со стоп-листа в iiko) =====
+        # ===== ОТКРЫТИЕ БЛЮД (поиск в iiko -> снять со стоп-листа) =====
+        # Старый сценарий (через Excel) оставлен в коде, но в UI не используется.
         self._tomorrow_menu_dishes: List[DishItem] = []
         self._iiko_products_by_key: dict[str, str] = {}
         self._suppress_tomorrow_item_changed = False
 
+        # Данные для поиска по iiko
+        self._open_iiko_products: List[Any] = []
+        self._open_selected_ids: set[str] = set()
+
         self.lblTomorrowInfo = QLabel(
-            "1) Выберите Excel меню на завтра  2) Нажмите 'Загрузить из Excel'  3) Поставьте галочку — блюдо откроется (снимем со стоп-листа)"
+            "Введите название блюда — появятся подсказки из iiko.\n"
+            "Кликните по подсказке, чтобы добавить в список.\n"
+            "Поставьте галочки и нажмите «Открыть отмеченные» (снимем со стоп-листа)."
         )
 
-        self.btnLoadTomorrowFromExcel = QPushButton("Загрузить из Excel")
-        self.btnLoadTomorrowFromExcel.clicked.connect(self._load_tomorrow_dishes_from_excel)
-
         self.edTomorrowSearch = QLineEdit()
-        self.edTomorrowSearch.setPlaceholderText("Поиск по списку…")
-        self.edTomorrowSearch.textChanged.connect(self._filter_tomorrow_dishes)
+        self.edTomorrowSearch.setPlaceholderText("Начните вводить название блюда… (Enter — добавить)")
+        self.edTomorrowSearch.textChanged.connect(self._update_open_suggestions)
+        self.edTomorrowSearch.returnPressed.connect(self._add_open_from_enter)
 
-        self.lstTomorrowDishes = QListWidget()
-        self.lstTomorrowDishes.setMinimumHeight(320)
-        self.lstTomorrowDishes.itemChanged.connect(self._on_tomorrow_item_changed)
+        self.btnShowAllOpenDishes = QPushButton("Показать все блюда")
+        self.btnShowAllOpenDishes.clicked.connect(self._show_all_open_dishes)
+
+        btns_row_open = QWidget(); btns_layout_open = QHBoxLayout(btns_row_open)
+        LayoutStyles.apply_margins(btns_layout_open, LayoutStyles.NO_MARGINS)
+        btns_layout_open.addWidget(self.btnShowAllOpenDishes)
+        btns_layout_open.addStretch(1)
+
+        # Подсказки (выпадающий список поверх UI — не в layout)
+        self.lstTomorrowDishes = QListWidget(self)
+        self.lstTomorrowDishes.setWindowFlags(Qt.Popup)
+        self.lstTomorrowDishes.setFocusPolicy(Qt.NoFocus)
+        self.lstTomorrowDishes.hide()
+        self.lstTomorrowDishes.itemClicked.connect(self._on_open_suggestion_clicked)
+        self.lstTomorrowDishes.itemDoubleClicked.connect(self._on_open_suggestion_clicked)
+
+        # Выбранные
+        self.lstTomorrowSelectedDishes = QListWidget()
+        self.lstTomorrowSelectedDishes.setMinimumHeight(160)
+
+        self.btnClearTomorrowSelection = QPushButton("Очистить выбор")
+        self.btnClearTomorrowSelection.clicked.connect(self._clear_open_selection)
 
         tomorrow_box = QWidget(); tomorrow_layout = QVBoxLayout(tomorrow_box)
         tomorrow_layout.addWidget(self.lblTomorrowInfo)
-        tomorrow_layout.addWidget(self.btnLoadTomorrowFromExcel)
+        tomorrow_layout.addWidget(label_caption("Поиск блюда"))
         tomorrow_layout.addWidget(self.edTomorrowSearch)
-        tomorrow_layout.addWidget(label_caption("Блюда на завтра (галочка = открыть)"))
-        tomorrow_layout.addWidget(self.lstTomorrowDishes)
+        tomorrow_layout.addWidget(btns_row_open)
 
-        self.grpTomorrowOpen = nice_group("Открыть блюда на завтра (iiko стоп-лист)", tomorrow_box)
+        tomorrow_layout.addWidget(label_caption("Выбранные блюда (с галочками)"))
+        tomorrow_layout.addWidget(self.lstTomorrowSelectedDishes)
+        tomorrow_layout.addWidget(self.btnClearTomorrowSelection)
+
+        self.grpTomorrowOpen = nice_group("Открыть блюда (iiko стоп-лист)", tomorrow_box)
         self.contentLayout.addWidget(self.grpTomorrowOpen)
         self.grpTomorrowOpen.setVisible(False)
 
@@ -691,6 +720,12 @@ class MainWindow(QMainWindow):
 
         # Добавляем нижний растягивающий элемент, чтобы контент не растягивался равномерно, а был прижат кверху
         self.contentLayout.addStretch(1)
+
+        # Прячем подсказки при клике вне поля поиска (как выпадающий список)
+        try:
+            QApplication.instance().installEventFilter(self)
+        except Exception:
+            pass
 
         # Theming initialization
         self._theme_mode = ThemeMode.SYSTEM  # По умолчанию используем системную тему
@@ -1044,6 +1079,9 @@ class MainWindow(QMainWindow):
         - iikoTransport (iiko.biz:9900) через user_id/user_secret
         """
         try:
+            # По умолчанию используем REST (/resto). Чтобы открыть скрытые способы — удерживайте Shift.
+            use_advanced = bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
+
             # Явно предлагаем "Сбросить" перед вводом, чтобы точно убрать старые данные.
             msg = QMessageBox(self)
             msg.setWindowTitle("iiko")
@@ -1064,29 +1102,36 @@ class MainWindow(QMainWindow):
             elif clicked != btn_continue:
                 return
 
-            # Выбор способа подключения
+            # По умолчанию используем REST (/resto) — он нужен для снятия со стоп-листа.
+            # Остальные способы не удаляем, но скрываем.
+
             methods = [
                 "iikoRMS REST (/resto)",
                 "iikoCloud API v1 (apiLogin, api-ru.iiko.services)",
                 "iikoTransport (user_id/user_secret, iiko.biz:9900)",
             ]
-            cur_mode = (self._iiko_mode or "cloud").strip().lower()
-            if cur_mode in ("biz", "transport", "iikobiz", "iiko.biz"):
-                default_idx = 2
-            elif cur_mode in ("rest", "rms", "resto"):
-                default_idx = 0
+
+            if use_advanced:
+                cur_mode = (self._iiko_mode or "cloud").strip().lower()
+                if cur_mode in ("biz", "transport", "iikobiz", "iiko.biz"):
+                    default_idx = 2
+                elif cur_mode in ("rest", "rms", "resto"):
+                    default_idx = 0
+                else:
+                    default_idx = 1
+
+                chosen, ok = QInputDialog.getItem(
+                    self,
+                    "iiko",
+                    "Способ подключения:",
+                    methods,
+                    default_idx,
+                    False,
+                )
+                if not ok:
+                    return
             else:
-                default_idx = 1
-            chosen, ok = QInputDialog.getItem(
-                self,
-                "iiko",
-                "Способ подключения:",
-                methods,
-                default_idx,
-                False,
-            )
-            if not ok:
-                return
+                chosen = "iikoRMS REST (/resto)"
 
             # ===== iikoRMS REST (/resto) =====
             if chosen.startswith("iikoRMS"):
@@ -1130,6 +1175,8 @@ class MainWindow(QMainWindow):
                 # сбросим кэши номенклатуры
                 self._iiko_products_by_key = {}
                 self._pricelist_dishes = []
+                self._open_iiko_products = []
+                self._open_selected_ids = set()
 
                 try:
                     self._settings.setValue("iiko/mode", "rest")
@@ -1210,6 +1257,8 @@ class MainWindow(QMainWindow):
                 # сбросим кэши номенклатуры
                 self._iiko_products_by_key = {}
                 self._pricelist_dishes = []
+                self._open_iiko_products = []
+                self._open_selected_ids = set()
 
                 try:
                     self._settings.setValue("iiko/mode", "biz")
@@ -1280,6 +1329,8 @@ class MainWindow(QMainWindow):
             # сбросим кэши номенклатуры
             self._iiko_products_by_key = {}
             self._pricelist_dishes = []
+            self._open_iiko_products = []
+            self._open_selected_ids = set()
 
             try:
                 self._settings.setValue("iiko/mode", "cloud")
@@ -1595,8 +1646,121 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
+    def _set_open_suggestions_visible(self, visible: bool) -> None:
+        """Показать/скрыть выпадающие подсказки (popup)."""
+        try:
+            if not hasattr(self, "lstTomorrowDishes"):
+                return
+
+            if not visible:
+                self.lstTomorrowDishes.hide()
+                return
+
+            # позиционируем под полем поиска
+            le = getattr(self, "edTomorrowSearch", None)
+            if le is None:
+                return
+
+            # ширина = как у поля поиска
+            try:
+                self.lstTomorrowDishes.setFixedWidth(le.width())
+            except Exception:
+                pass
+
+            # высота: до 8 строк или максимум 320px
+            try:
+                cnt = max(1, int(self.lstTomorrowDishes.count()))
+                rows = min(cnt, 8)
+                row_h = self.lstTomorrowDishes.sizeHintForRow(0)
+                if not row_h:
+                    row_h = max(24, int(self.lstTomorrowDishes.fontMetrics().height()) + 8)
+                h = min(320, rows * row_h + 2 * int(self.lstTomorrowDishes.frameWidth()))
+                self.lstTomorrowDishes.setFixedHeight(h)
+            except Exception:
+                pass
+
+            try:
+                gp = le.mapToGlobal(QPoint(0, le.height()))
+            except Exception:
+                gp = None
+
+            if gp is not None:
+                # если внизу не помещается — покажем сверху
+                try:
+                    screen = QGuiApplication.screenAt(gp) or QGuiApplication.primaryScreen()
+                    if screen is not None:
+                        geo = screen.availableGeometry()
+                        if gp.y() + self.lstTomorrowDishes.height() > geo.bottom():
+                            gp = le.mapToGlobal(QPoint(0, -self.lstTomorrowDishes.height()))
+                except Exception:
+                    pass
+
+                try:
+                    self.lstTomorrowDishes.move(gp)
+                except Exception:
+                    pass
+
+            self.lstTomorrowDishes.show()
+            self.lstTomorrowDishes.raise_()
+
+        except Exception:
+            pass
+
+    def _hide_open_suggestions(self) -> None:
+        self._set_open_suggestions_visible(False)
+
+    def eventFilter(self, obj, event):
+        # Скрываем "выпадающие" подсказки для "Открыть блюда", если кликнули вне поиска/списка.
+        try:
+            if event.type() == QEvent.MouseButtonPress:
+                # работаем только когда открыт раздел "Открыть блюда"
+                if not getattr(self, "grpTomorrowOpen", None) or (not self.grpTomorrowOpen.isVisible()):
+                    return super().eventFilter(obj, event)
+
+                # глобальная позиция клика
+                try:
+                    gp = event.globalPosition().toPoint()  # Qt6
+                except Exception:
+                    gp = event.globalPos()  # fallback
+
+                def _inside(w) -> bool:
+                    try:
+                        if (not w) or (not w.isVisible()):
+                            return False
+                        return w.rect().contains(w.mapFromGlobal(gp))
+                    except Exception:
+                        return False
+
+                inside_search = _inside(getattr(self, "edTomorrowSearch", None))
+                inside_suggestions = _inside(getattr(self, "lstTomorrowDishes", None))
+
+                # Клик в поиске или в подсказках — не прячем
+                if inside_search:
+                    # если подсказки были скрыты, а текст уже введён — покажем снова
+                    try:
+                        if (not self.lstTomorrowDishes.isVisible()) and len((self.edTomorrowSearch.text() or "").strip()) >= 2:
+                            self._update_open_suggestions(self.edTomorrowSearch.text())
+                    except Exception:
+                        pass
+                    return super().eventFilter(obj, event)
+
+                if inside_suggestions:
+                    return super().eventFilter(obj, event)
+
+                # кликнули куда-то ещё — скрываем подсказки (если они показаны)
+                try:
+                    if self.lstTomorrowDishes.isVisible():
+                        self._hide_open_suggestions()
+                except Exception:
+                    pass
+
+        except Exception:
+            pass
+
+        return super().eventFilter(obj, event)
+
     def do_open_tomorrow_dishes(self):
-        """Открытие блюд на завтра: берём Excel-меню и снимаем блюда со стоп-листа в iiko."""
+        """Открыть блюда: поиск в iiko -> выбрать -> снять со стоп-листа (REST /resto)."""
         try:
             # Скрываем другие панели
             if hasattr(self, "grpFirst"):
@@ -1620,11 +1784,9 @@ class MainWindow(QMainWindow):
             if hasattr(self, "grpDocuments"):
                 self.grpDocuments.setVisible(False)
 
-            # Показываем выбор Excel-файла меню на завтра
+            # Для "Открыть блюда" Excel не нужен
             if hasattr(self, "grpExcelFile"):
-                self.grpExcelFile.setVisible(True)
-                self.grpExcelFile.setTitle("Excel меню на завтра")
-                self.edExcelPath.setPlaceholderText("Выберите Excel файл меню на завтра (тот же формат, что и для презентации/журнала)…")
+                self.grpExcelFile.setVisible(False)
 
             if hasattr(self, "grpTomorrowOpen"):
                 self.grpTomorrowOpen.setVisible(True)
@@ -1633,11 +1795,23 @@ class MainWindow(QMainWindow):
 
             # Сброс состояния
             self._tomorrow_menu_dishes = []
+            self._open_selected_ids = set()
             self.edTomorrowSearch.clear()
             self.lstTomorrowDishes.clear()
+            self._hide_open_suggestions()
+            if hasattr(self, "lstTomorrowSelectedDishes"):
+                self.lstTomorrowSelectedDishes.clear()
+
             self.lblTomorrowInfo.setText(
-                "1) Выберите Excel меню на завтра  2) Нажмите 'Загрузить из Excel'  3) Поставьте галочку — блюдо откроется (снимем со стоп-листа)"
+                "Введите название блюда — появятся подсказки из iiko.\n"
+                "Кликните по подсказке, чтобы добавить в список.\n"
+                "Поставьте галочки и нажмите «Открыть отмеченные» (снимем со стоп-листа)."
             )
+
+            try:
+                self.edTomorrowSearch.setFocus()
+            except Exception:
+                pass
 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
@@ -2122,6 +2296,179 @@ class MainWindow(QMainWindow):
     def _pl_key(self, name: str) -> str:
         return " ".join(str(name).strip().lower().replace('ё', 'е').split())
 
+    # ===== Открыть блюда: поиск в iiko -> выбрать -> снять со стоп-листа =====
+    def _format_iiko_product_line(self, p: Any) -> str:
+        name = (getattr(p, "name", "") or "").strip()
+        weight = (getattr(p, "weight", "") or "").strip()
+        price = (getattr(p, "price", "") or "").strip()
+
+        parts = [name]
+        if weight:
+            parts.append(weight)
+        if price:
+            parts.append(price)
+        return " — ".join([x for x in parts if x])
+
+    def _load_open_iiko_products(self) -> None:
+        products = self._get_iiko_products()
+        self._open_iiko_products = list(products or [])
+        # как на вкладке ценников: после автозагрузки сразу обновим подсказки
+        try:
+            self._update_open_suggestions(self.edTomorrowSearch.text())
+        except Exception:
+            pass
+
+    def _show_all_open_dishes(self):
+        """Показывает подсказки без фильтра (с ограничением по количеству)."""
+        try:
+            if not self._open_iiko_products:
+                if not self._can_autoload_iiko_products():
+                    QMessageBox.warning(self, "iiko", "Сначала нажмите 'Авторизация точки'.")
+                    return
+                self.lblTomorrowInfo.setText("Загружаю блюда из iiko…")
+                self._load_open_iiko_products()
+
+            self.lstTomorrowDishes.clear()
+            if not self._open_iiko_products:
+                self.lblTomorrowInfo.setText("Список блюд пуст")
+                return
+
+            limit = 500
+            for p in self._open_iiko_products[:limit]:
+                item = QListWidgetItem(self._format_iiko_product_line(p))
+                item.setData(Qt.UserRole, p)
+                self.lstTomorrowDishes.addItem(item)
+
+            self._set_open_suggestions_visible(self.lstTomorrowDishes.count() > 0)
+
+            if len(self._open_iiko_products) > limit:
+                self.lblTomorrowInfo.setText(
+                    f"Загружено из iiko: {len(self._open_iiko_products)} (показаны первые {limit}). "
+                    "Введите 2+ символа для поиска."
+                )
+            else:
+                self.lblTomorrowInfo.setText(f"Загружено из iiko: {len(self._open_iiko_products)}")
+
+        except IikoApiError as e:
+            QMessageBox.critical(self, "iiko", str(e))
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _update_open_suggestions(self, text: str):
+        """Обновляет подсказки по вводу (как на вкладке ценников)."""
+        self.lstTomorrowDishes.clear()
+
+        q = (text or "").strip().lower().replace("ё", "е")
+        if len(q) < 2:
+            self._hide_open_suggestions()
+            return
+
+        # Автозагрузка номенклатуры при первом поиске
+        if (not self._open_iiko_products) and self._can_autoload_iiko_products():
+            try:
+                self.lblTomorrowInfo.setText("Загружаю блюда из iiko…")
+                self._load_open_iiko_products()
+            except Exception:
+                pass
+            return
+
+        if not self._open_iiko_products:
+            self.lblTomorrowInfo.setText(
+                "Список блюд не загружен. Нажмите «Авторизация точки» и попробуйте снова."
+            )
+            return
+
+        shown = 0
+        for p in self._open_iiko_products:
+            name_norm = (getattr(p, "name", "") or "").lower().replace("ё", "е")
+            if q in name_norm:
+                item = QListWidgetItem(self._format_iiko_product_line(p))
+                item.setData(Qt.UserRole, p)
+                self.lstTomorrowDishes.addItem(item)
+                shown += 1
+                if shown >= 30:
+                    break
+
+        if shown:
+            self._set_open_suggestions_visible(True)
+            self.lblTomorrowInfo.setText(f"Найдено: {shown} (показаны первые 30)")
+        else:
+            self._hide_open_suggestions()
+            self.lblTomorrowInfo.setText("Совпадений не найдено")
+
+    def _add_open_selected(self, p: Any):
+        pid = (getattr(p, "product_id", "") or "").strip()
+        base_line = self._format_iiko_product_line(p)
+        if not pid or not base_line:
+            return
+        if pid in self._open_selected_ids:
+            return
+
+        it = QListWidgetItem(base_line)
+        it.setData(Qt.UserRole, pid)
+        it.setData(Qt.UserRole + 1, "ready")
+        # base text (без статуса), чтобы после открытия не терять вес/цену
+        it.setData(Qt.UserRole + 2, base_line)
+        it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+        it.setCheckState(Qt.Checked)
+
+        self.lstTomorrowSelectedDishes.addItem(it)
+        self._open_selected_ids.add(pid)
+
+    def _on_open_suggestion_clicked(self, item: QListWidgetItem):
+        try:
+            p = item.data(Qt.UserRole)
+            if p is not None:
+                self._add_open_selected(p)
+            # после выбора — прячем подсказки как выпадающий список
+            self._hide_open_suggestions()
+        except Exception:
+            pass
+
+    def _add_open_from_enter(self):
+        """Enter в поле поиска: добавляем точное совпадение или первый пункт из подсказок."""
+        try:
+            if not self._open_iiko_products:
+                try:
+                    self.lblTomorrowInfo.setText("Загружаю блюда из iiko…")
+                    self._load_open_iiko_products()
+                except Exception:
+                    pass
+                if not self._open_iiko_products:
+                    return
+
+            q_raw = (self.edTomorrowSearch.text() or "").strip()
+            if not q_raw:
+                return
+            q = self._pl_key(q_raw)
+
+            # 1) точное совпадение по названию
+            for p in self._open_iiko_products:
+                if self._pl_key(getattr(p, "name", "")) == q:
+                    self._add_open_selected(p)
+                    self._hide_open_suggestions()
+                    return
+
+            # 2) иначе — первый элемент подсказок
+            if self.lstTomorrowDishes.count() > 0:
+                it = self.lstTomorrowDishes.item(0)
+                p = it.data(Qt.UserRole)
+                if p is not None:
+                    self._add_open_selected(p)
+                    self._hide_open_suggestions()
+                    return
+
+            QMessageBox.information(self, "Не найдено", "По вашему запросу нет совпадений в iiko.")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _clear_open_selection(self):
+        try:
+            self.lstTomorrowSelectedDishes.clear()
+        except Exception:
+            pass
+        self._open_selected_ids = set()
+
     # ===== Открытие блюд на завтра (Excel -> iiko stoplist) =====
     def _load_tomorrow_dishes_from_excel(self):
         try:
@@ -2199,22 +2546,34 @@ class MainWindow(QMainWindow):
             it.setHidden(not show)
 
     def _open_one_tomorrow_item(self, it: QListWidgetItem) -> bool:
-        """Снять со стоп-листа.
+        """Снять блюдо со стоп-листа.
 
-        Сейчас в проекте оставлен один способ авторизации (iiko.biz по ссылке).
-        Снятие со стоп-листа в этом приложении ранее делалось через /resto, но на вашей стороне
-        REST часто блокируется лицензией (REST_API(2000)).
-
-        Поэтому здесь пока показываем понятную ошибку, чтобы приложение не просило пароль REST.
+        Реализация: через iikoRMS REST (/resto).
         """
         pid = (it.data(Qt.UserRole) or "").strip()
         if not pid:
             return False
 
-        raise IikoApiError(
-            "Открытие блюда (снятие со стоп-листа) сейчас не настроено через iiko.biz. "
-            "Нужно либо включить REST (/resto) на сервере, либо реализовать 'приказы' через iikoChain." 
-        )
+        mode = (self._iiko_mode or "cloud").strip().lower()
+        if mode not in ("rest", "rms", "resto"):
+            raise IikoApiError(
+                "Открытие блюда (снятие со стоп-листа) доступно только через REST (/resto). "
+                "Нажмите 'Авторизация точки' и выполните вход (REST)."
+            )
+
+        # REST: убедимся, что есть sha1 пароля
+        if not self._ensure_iiko_pass_sha1():
+            raise IikoApiError("Не задан SHA1-хэш пароля для REST. Нажмите 'Авторизация точки'.")
+
+        base_url = (self._iiko_base_url or "").strip()
+        login = (self._iiko_login or "").strip()
+        pass_sha1 = (self._iiko_pass_sha1_cached or "").strip()
+        if not base_url or not login or not pass_sha1:
+            raise IikoApiError("Не заданы параметры REST (/resto). Нажмите 'Авторизация точки'.")
+
+        client = IikoRmsClient(base_url=base_url, login=login, pass_sha1=pass_sha1)
+        client.open_product_from_stoplist(pid)
+        return True
 
     def _on_tomorrow_item_changed(self, item: QListWidgetItem):
         if self._suppress_tomorrow_item_changed:
@@ -2266,12 +2625,14 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", str(e))
 
     def _open_tomorrow_checked(self):
+        """Открывает (снимает со стоп-листа) отмеченные блюда из списка выбранных."""
         try:
+            if not hasattr(self, "lstTomorrowSelectedDishes"):
+                return
+
             any_done = False
-            for i in range(self.lstTomorrowDishes.count()):
-                it = self.lstTomorrowDishes.item(i)
-                if it.isHidden():
-                    continue
+            for i in range(self.lstTomorrowSelectedDishes.count()):
+                it = self.lstTomorrowSelectedDishes.item(i)
                 if it.checkState() != Qt.Checked:
                     continue
                 if it.data(Qt.UserRole + 1) == "opened":
@@ -2280,14 +2641,14 @@ class MainWindow(QMainWindow):
                     self._open_one_tomorrow_item(it)
                     it.setData(Qt.UserRole + 1, "opened")
                     it.setForeground(QBrush(QColor("#2e7d32")))
-                    base_name = (it.data(Qt.UserRole + 2) or it.text() or "")
-                    it.setText(f"{base_name}  (ОТКРЫТО)")
+                    base_line = (it.data(Qt.UserRole + 2) or it.text() or "")
+                    it.setText(f"{base_line}  (ОТКРЫТО)")
                     any_done = True
                 except IikoApiError as e:
                     it.setData(Qt.UserRole + 1, "failed")
                     it.setForeground(QBrush(QColor("#b71c1c")))
-                    base_name = (it.data(Qt.UserRole + 2) or it.text() or "")
-                    it.setText(f"{base_name}  (ошибка открытия)")
+                    base_line = (it.data(Qt.UserRole + 2) or it.text() or "")
+                    it.setText(f"{base_line}  (ошибка открытия)")
                     QMessageBox.critical(self, "iiko", str(e))
                     return
 

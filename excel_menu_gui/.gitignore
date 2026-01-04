@@ -9,3 +9,10 @@ __pycache__/
 breakfast_only.xlsx
 filled_*.xlsx
 test_*.xlsx
+
+# Local debug artifacts (do not commit)
+inspect_output.txt
+out_latest.xlsx
+run_copy.py
+source_categories.json
+tmp_inspect.py
