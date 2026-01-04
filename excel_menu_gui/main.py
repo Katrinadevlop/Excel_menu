@@ -1691,7 +1691,45 @@ class MainWindow(QMainWindow):
                 return
 
             desktop = Path.home() / "Desktop"
-            suggested_path = str(desktop / "menu_ready.xlsx")
+
+            # Имя файла: "<дата месяц> - <день недели>.xlsx" (берём из исходного файла: B3 и B2).
+            suggested_name = "menu_ready.xlsx"
+
+            def _sanitize_filename_part(s) -> str:
+                text = str(s or "")
+                for ch in '<>:"/\\|?*':
+                    text = text.replace(ch, " ")
+                return " ".join(text.split()).strip()
+
+            try:
+                from openpyxl import load_workbook
+
+                wb_in = load_workbook(excel_path, data_only=True)
+                if "Касса" in wb_in.sheetnames:
+                    ws_in = wb_in["Касса"]
+                else:
+                    ws_in = wb_in.active
+
+                weekday = _sanitize_filename_part(ws_in["B2"].value)
+                day_month = _sanitize_filename_part(ws_in["B3"].value)
+
+                base = ""
+                if day_month and weekday:
+                    base = f"{day_month} - {weekday}"
+                elif day_month:
+                    base = day_month
+                else:
+                    base = _sanitize_filename_part(Path(excel_path).stem)
+
+                if base:
+                    suggested_name = f"{base}.xlsx"
+                    # чтобы не перезаписать исходный файл по умолчанию
+                    if (desktop / suggested_name).exists():
+                        suggested_name = f"{base} - готово.xlsx"
+            except Exception:
+                pass
+
+            suggested_path = str(desktop / suggested_name)
             save_path, _ = QFileDialog.getSaveFileName(
                 self,
                 "Сохранить динамически заполненный шаблон",
