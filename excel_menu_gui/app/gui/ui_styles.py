@@ -403,18 +403,19 @@ class ThemeAwareStyles:
         border = cls.get_border_color(is_dark)
         tooltip_border = cls.get_tooltip_border_color(is_dark)
 
-        # Календарь: в светлой теме — бежевый, в тёмной — используем палитру приложения.
+        # Календарь: в светлой теме — бежевый, в тёмной — тёмный фон + бежевое выделение.
+        # Важно: выделение делаем бежевым, чтобы не было "синего" (акцент Windows).
         if is_dark:
-            cal_bg = "palette(Base)"
-            cal_text = "palette(Text)"
-            cal_sel_bg = "palette(Highlight)"
-            cal_sel_text = "palette(HighlightedText)"
-            cal_hover_bg = "palette(Button)"
+            cal_bg = "#2b2d30"
+            cal_text = "#e6e6e6"
+            cal_sel_bg = "#c2a77d"   # бежевое выделение
+            cal_sel_text = "#1b1b1b" # тёмный текст на бежевом
+            cal_hover_bg = "#35373c"
             cal_disabled_text = "#808080"
         else:
             cal_bg = "#f5f0e6"
             cal_text = "#1b1b1b"
-            cal_sel_bg = "#e2c9a7"
+            cal_sel_bg = "#e2c9a7"   # бежевое выделение
             cal_sel_text = "#1b1b1b"
             cal_hover_bg = "#eadcc8"
             cal_disabled_text = "#9a9a9a"

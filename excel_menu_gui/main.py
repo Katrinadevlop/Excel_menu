@@ -15,7 +15,7 @@ from PySide6.QtCore import (
     Qt, QMimeData, QSize, QUrl, QSettings, QEvent, QPoint, QTimer, QDate,
     QObject, Signal, QThread, QCoreApplication, QLockFile,
 )
-from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QBrush, QLinearGradient, QFont, QDesktopServices, QGuiApplication
+from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QBrush, QLinearGradient, QFont, QDesktopServices, QGuiApplication, QTextCharFormat
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QBoxLayout,
     QLabel, QPushButton, QFileDialog, QTextEdit, QComboBox, QLineEdit,
@@ -1167,17 +1167,29 @@ class MainWindow(QMainWindow):
         self.btnFryerJournal.clicked.connect(self.open_fryer_oil_journal)
         StyleManager.style_action_button(self.btnFryerJournal)
 
+        # Категории
+        docs_layout.addWidget(label_caption("Персонал / Кадры"))
         docs_layout.addWidget(self.btnVacationStatement)
         docs_layout.addWidget(self.btnMedicalBooks)
         docs_layout.addWidget(self.btnBirthdayFile)
-        docs_layout.addWidget(self.btnHygieneJournal)
         docs_layout.addWidget(self.btnDirection)
-        docs_layout.addWidget(self.btnLockerDoc)
+
+        docs_layout.addSpacing(AppStyles.CONTENT_SPACING)
+        docs_layout.addWidget(label_caption("Санитария и контроль"))
+        docs_layout.addWidget(self.btnHygieneJournal)
         docs_layout.addWidget(self.btnFridgeTemp)
         docs_layout.addWidget(self.btnFreezerTemp)
+        docs_layout.addWidget(self.btnFryerJournal)
+
+        docs_layout.addSpacing(AppStyles.CONTENT_SPACING)
+        docs_layout.addWidget(label_caption("Производство"))
         docs_layout.addWidget(self.btnBuffetSheet)
         docs_layout.addWidget(self.btnBakerSheet)
-        docs_layout.addWidget(self.btnFryerJournal)
+
+        docs_layout.addSpacing(AppStyles.CONTENT_SPACING)
+        docs_layout.addWidget(label_caption("Помещения"))
+        docs_layout.addWidget(self.btnLockerDoc)
+
         docs_layout.addStretch(1)
 
         self.grpDocuments = nice_group("Документы", docs_box)
@@ -1229,7 +1241,16 @@ class MainWindow(QMainWindow):
 
         # Theming initialization
         self._theme_mode = ThemeMode.SYSTEM  # По умолчанию используем системную тему
-        apply_theme(QApplication.instance(), self._theme_mode)
+        try:
+            apply_theme(QApplication.instance(), self._theme_mode)
+        except Exception:
+            pass
+
+        # Обновим стили календаря после применения темы
+        try:
+            self._apply_calendar_theme_overrides()
+        except Exception:
+            pass
         
         # Запускаем таймер для отслеживания изменений системной темы
         self._theme_timer = start_system_theme_watcher(
@@ -1248,24 +1269,84 @@ class MainWindow(QMainWindow):
         pass
 
     def on_theme_changed(self, idx: int):
-        # Получаем режим темы из выбора пользователя
-        if idx == 0:
-            self._theme_mode = ThemeMode.SYSTEM  # Системная тема
-        elif idx == 1:
-            self._theme_mode = ThemeMode.LIGHT   # Светлая тема
-        else:
-            self._theme_mode = ThemeMode.DARK    # Тёмная тема
-            
-        # Применяем выбранную тему
-        apply_theme(QApplication.instance(), self._theme_mode)
-        
+        try:
+            # Получаем режим темы из выбора пользователя
+            if idx == 0:
+                self._theme_mode = ThemeMode.SYSTEM  # Системная тема
+            elif idx == 1:
+                self._theme_mode = ThemeMode.LIGHT   # Светлая тема
+            else:
+                self._theme_mode = ThemeMode.DARK    # Тёмная тема
+
+            # Применяем выбранную тему
+            apply_theme(QApplication.instance(), self._theme_mode)
+        except Exception:
+            pass
+
+        try:
+            self._apply_calendar_theme_overrides()
+        except Exception:
+            pass
     def handle_system_theme_change(self, is_light: bool):
         """Обработчик изменения системной темы Windows"""
-        # Обновляем тему только если выбрана "Системная"
-        if self._theme_mode == ThemeMode.SYSTEM and self.cmbTheme.currentIndex() == 0:
-            # Применяем соответствующую системную тему
-            theme = ThemeMode.LIGHT if is_light else ThemeMode.DARK
-            apply_theme(QApplication.instance(), theme)
+        try:
+            # Обновляем тему только если выбрана "Системная"
+            if self._theme_mode == ThemeMode.SYSTEM and self.cmbTheme.currentIndex() == 0:
+                # Применяем соответствующую системную тему
+                theme = ThemeMode.LIGHT if is_light else ThemeMode.DARK
+                apply_theme(QApplication.instance(), theme)
+        except Exception:
+            pass
+
+        try:
+            self._apply_calendar_theme_overrides()
+        except Exception:
+            pass
+
+    def _is_dark_palette(self) -> bool:
+        """Пытаемся определить, тёмная ли сейчас тема по палитре приложения."""
+        try:
+            p = QApplication.instance().palette()
+            c = p.color(QPalette.Window)
+            # относительная яркость
+            lum = 0.2126 * float(c.red()) + 0.7152 * float(c.green()) + 0.0722 * float(c.blue())
+            return lum < 128.0
+        except Exception:
+            return False
+
+    def _apply_calendar_theme_overrides(self) -> None:
+        """Убирает красные выходные и делает бежевое выделение в календаре."""
+        try:
+            if not hasattr(self, "calOpenDate"):
+                return
+
+            dark = self._is_dark_palette()
+
+            # бежевое выделение (в тёмной теме делаем чуть темнее/приглушённее)
+            sel_bg = QColor("#e2c9a7") if not dark else QColor("#c2a77d")
+            sel_text = QColor("#1b1b1b")
+
+            pal = self.calOpenDate.palette()
+            pal.setColor(QPalette.Highlight, sel_bg)
+            pal.setColor(QPalette.HighlightedText, sel_text)
+            self.calOpenDate.setPalette(pal)
+
+            # Убираем красный цвет выходных (делаем как обычный текст)
+            try:
+                fmt_weekend = QTextCharFormat()
+                fmt_weekend.setForeground(QBrush(self.calOpenDate.palette().color(QPalette.Text)))
+                self.calOpenDate.setWeekendTextFormat(fmt_weekend)
+                # иногда "красное" задаётся отдельно для дней недели
+                try:
+                    self.calOpenDate.setWeekdayTextFormat(Qt.Saturday, fmt_weekend)
+                    self.calOpenDate.setWeekdayTextFormat(Qt.Sunday, fmt_weekend)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        except Exception:
+            pass
 
 
     def closeEvent(self, event):
@@ -2619,9 +2700,10 @@ class MainWindow(QMainWindow):
             if hasattr(self, "tomorrowOpenActionsPanel"):
                 self.tomorrowOpenActionsPanel.setVisible(True)
 
-            # Сброс состояния
+            # Сброс состояния поиска/подсказок (выбор блюд сохраняем)
             try:
-                self._open_selected_ids = set()
+                self._rebuild_open_selected_ids_from_list()
+                self._sort_open_selected_list()
             except Exception:
                 pass
             try:
@@ -2633,8 +2715,6 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             self._hide_open_suggestions()
-            if hasattr(self, "lstTomorrowSelectedDishes"):
-                self.lstTomorrowSelectedDishes.clear()
 
             # Покажем статус расписания (если есть)
             self._set_tomorrow_info(self._format_open_schedule_status())
@@ -2697,14 +2777,17 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-            # Сброс состояния выбора (номенклатуру оставляем в кэше, чтобы не заставлять пользователя "загружать" вручную)
-            self._pricelist_selected_keys = set()
+            # Сброс состояния поиска/подсказок (выбор блюд сохраняем)
+            try:
+                self._rebuild_pricelist_selected_keys_from_list()
+                self._sort_pricelist_selected_list()
+            except Exception:
+                pass
             try:
                 self.edDishSearch.clear()
             except Exception:
                 pass
             self.lstDishSuggestions.clear()
-            self.lstSelectedDishes.clear()
 
             try:
                 self.edDishSearch.setFocus()
@@ -2932,10 +3015,9 @@ class MainWindow(QMainWindow):
                     base = _sanitize_filename_part(Path(excel_path).stem)
 
                 if base:
+                    # Всегда предлагаем имя без суффикса "- готово".
+                    # Если файл уже существует, диалог сохранения сам спросит подтверждение перезаписи.
                     suggested_name = f"{base}.xlsx"
-                    # чтобы не перезаписать исходный файл по умолчанию
-                    if (desktop / suggested_name).exists():
-                        suggested_name = f"{base} - готово.xlsx"
             except Exception:
                 pass
 
@@ -3415,6 +3497,146 @@ class MainWindow(QMainWindow):
     def _pl_key(self, name: str) -> str:
         return " ".join(str(name).strip().lower().replace('ё', 'е').split())
 
+    def _rebuild_open_selected_ids_from_list(self) -> None:
+        """Синхронизирует self._open_selected_ids с UI-списком выбранных блюд."""
+        try:
+            ids: set[str] = set()
+            if hasattr(self, "lstTomorrowSelectedDishes"):
+                for i in range(self.lstTomorrowSelectedDishes.count()):
+                    it = self.lstTomorrowSelectedDishes.item(i)
+                    pid = str(it.data(Qt.UserRole) or "").strip()
+                    if pid:
+                        ids.add(pid)
+            self._open_selected_ids = ids
+        except Exception:
+            self._open_selected_ids = set()
+
+    def _rebuild_pricelist_selected_keys_from_list(self) -> None:
+        """Синхронизирует self._pricelist_selected_keys с UI-списком выбранных блюд."""
+        try:
+            keys: set[str] = set()
+            if hasattr(self, "lstSelectedDishes"):
+                for i in range(self.lstSelectedDishes.count()):
+                    it = self.lstSelectedDishes.item(i)
+                    d = it.data(Qt.UserRole)
+                    if isinstance(d, DishItem):
+                        k = self._pl_key(d.name)
+                        if k:
+                            keys.add(k)
+            self._pricelist_selected_keys = keys
+        except Exception:
+            self._pricelist_selected_keys = set()
+
+    def _sort_open_selected_list(self) -> None:
+        """Сортирует список выбранных блюд в "Открыть блюда" по названию."""
+        try:
+            if not hasattr(self, "lstTomorrowSelectedDishes"):
+                return
+
+            rows = []
+            for i in range(self.lstTomorrowSelectedDishes.count()):
+                it = self.lstTomorrowSelectedDishes.item(i)
+
+                pid = str(it.data(Qt.UserRole) or "").strip()
+                status = str(it.data(Qt.UserRole + 1) or "ready")
+                base_line = str(it.data(Qt.UserRole + 2) or it.text() or "").strip()
+                sort_key = str(it.data(Qt.UserRole + 3) or "").strip()
+
+                if not sort_key:
+                    name = (base_line.split(" — ", 1)[0] if base_line else "")
+                    sort_key = self._pl_key(name)
+
+                try:
+                    check_state = it.checkState()
+                except Exception:
+                    check_state = Qt.Checked
+
+                try:
+                    fg = it.foreground()
+                except Exception:
+                    fg = None
+
+                try:
+                    flags = it.flags()
+                except Exception:
+                    flags = Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable
+
+                rows.append((sort_key, base_line, pid, status, check_state, fg, flags))
+
+            rows.sort(key=lambda r: ((r[0] or ""), (r[1] or "")))
+
+            self.lstTomorrowSelectedDishes.setUpdatesEnabled(False)
+            try:
+                self.lstTomorrowSelectedDishes.clear()
+                for sort_key, base_line, pid, status, check_state, fg, flags in rows:
+                    it2 = QListWidgetItem("")
+                    it2.setData(Qt.UserRole, pid)
+                    it2.setData(Qt.UserRole + 1, status)
+                    it2.setData(Qt.UserRole + 2, base_line)
+                    it2.setData(Qt.UserRole + 3, sort_key)
+
+                    it2.setFlags(flags | Qt.ItemIsUserCheckable)
+                    it2.setCheckState(check_state)
+
+                    if fg is not None:
+                        try:
+                            it2.setForeground(fg)
+                        except Exception:
+                            pass
+
+                    # финальный текст с учётом статуса
+                    self._apply_open_selected_item_text(it2, base_line)
+                    self.lstTomorrowSelectedDishes.addItem(it2)
+            finally:
+                self.lstTomorrowSelectedDishes.setUpdatesEnabled(True)
+
+            self._rebuild_open_selected_ids_from_list()
+        except Exception:
+            pass
+
+    def _sort_pricelist_selected_list(self) -> None:
+        """Сортирует список выбранных блюд в "Ценники" по названию."""
+        try:
+            if not hasattr(self, "lstSelectedDishes"):
+                return
+
+            rows = []
+            for i in range(self.lstSelectedDishes.count()):
+                it = self.lstSelectedDishes.item(i)
+                d = it.data(Qt.UserRole)
+
+                if isinstance(d, DishItem):
+                    sort_key = self._pl_key(d.name)
+                    line = self._format_dish_line(d)
+                else:
+                    line = str(it.text() or "")
+                    sort_key = self._pl_key(line.split(" — ", 1)[0] if line else "")
+
+                try:
+                    check_state = it.checkState()
+                except Exception:
+                    check_state = Qt.Checked
+
+                rows.append((sort_key, line, d, check_state))
+
+            rows.sort(key=lambda r: ((r[0] or ""), (r[1] or "")))
+
+            self.lstSelectedDishes.setUpdatesEnabled(False)
+            try:
+                self.lstSelectedDishes.clear()
+                for _, line, d, check_state in rows:
+                    it2 = QListWidgetItem(line)
+                    it2.setData(Qt.UserRole, d)
+                    it2.setFlags(it2.flags() | Qt.ItemIsUserCheckable)
+                    it2.setCheckState(check_state)
+                    self.lstSelectedDishes.addItem(it2)
+            finally:
+                self.lstSelectedDishes.setUpdatesEnabled(True)
+
+            self._rebuild_pricelist_selected_keys_from_list()
+        except Exception:
+            pass
+
     # ===== Открыть блюда: поиск в iiko -> выбрать -> снять со стоп-листа =====
     def _format_iiko_product_line(self, p: Any) -> str:
         name = (getattr(p, "name", "") or "").strip()
@@ -3534,12 +3756,51 @@ class MainWindow(QMainWindow):
             self._hide_open_suggestions()
             self._set_tomorrow_info("Совпадений не найдено")
 
+    def _apply_open_selected_item_text(self, it: QListWidgetItem, base_line: str) -> None:
+        """Обновляет отображение выбранного блюда с учётом статуса (ОТКРЫТО/ошибка/...)."""
+        try:
+            status = str(it.data(Qt.UserRole + 1) or "ready")
+        except Exception:
+            status = "ready"
+
+        suffix = ""
+        if status == "opened":
+            suffix = "  (ОТКРЫТО)"
+        elif status == "failed":
+            suffix = "  (ошибка открытия)"
+        elif status == "opening":
+            suffix = "  (открываю…)"
+
+        try:
+            it.setText(f"{base_line}{suffix}" if suffix else base_line)
+        except Exception:
+            pass
+
     def _add_open_selected(self, p: Any):
         pid = (getattr(p, "product_id", "") or "").strip()
         base_line = self._format_iiko_product_line(p)
         if not pid or not base_line:
             return
+
+        name = (getattr(p, "name", "") or "").strip()
+        sort_key = self._pl_key(name or base_line)
+
+        # Если уже есть в списке — не удаляем старое, а обновляем строку (вес/цена и т.п.)
         if pid in self._open_selected_ids:
+            try:
+                for i in range(self.lstTomorrowSelectedDishes.count()):
+                    it = self.lstTomorrowSelectedDishes.item(i)
+                    if str(it.data(Qt.UserRole) or "").strip() == pid:
+                        it.setData(Qt.UserRole + 2, base_line)
+                        it.setData(Qt.UserRole + 3, sort_key)
+                        self._apply_open_selected_item_text(it, base_line)
+                        break
+            except Exception:
+                pass
+            try:
+                self._sort_open_selected_list()
+            except Exception:
+                pass
             return
 
         it = QListWidgetItem(base_line)
@@ -3547,11 +3808,16 @@ class MainWindow(QMainWindow):
         it.setData(Qt.UserRole + 1, "ready")
         # base text (без статуса), чтобы после открытия не терять вес/цену
         it.setData(Qt.UserRole + 2, base_line)
+        it.setData(Qt.UserRole + 3, sort_key)
         it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
         it.setCheckState(Qt.Checked)
 
         self.lstTomorrowSelectedDishes.addItem(it)
         self._open_selected_ids.add(pid)
+        try:
+            self._sort_open_selected_list()
+        except Exception:
+            pass
 
     def _on_open_suggestion_clicked(self, item: QListWidgetItem):
         try:
@@ -3824,19 +4090,124 @@ class MainWindow(QMainWindow):
 
             # будущее: планируем
             if target > today:
-                # если уже есть pending-расписание — спросим, заменять ли
-                if isinstance(self._open_schedule_job, dict) and (self._open_schedule_job.get("state") or "pending").lower() == "pending":
+                run_at = datetime.combine(target, time(0, 1))
+                added_count: Optional[int] = None
+
+                # если уже есть pending-расписание — дадим выбрать: добавить к нему или заменить
+                if isinstance(self._open_schedule_job, dict) and (str(self._open_schedule_job.get("state") or "pending")).lower() == "pending":
+                    old = dict(self._open_schedule_job or {})
+
+                    old_run_at_s = str(old.get("run_at") or "")
+                    old_dt: Optional[datetime] = None
+                    old_when = old_run_at_s
+                    try:
+                        old_dt = datetime.fromisoformat(old_run_at_s)
+                        old_when = old_dt.strftime("%d.%m.%Y %H:%M")
+                    except Exception:
+                        old_dt = None
+
+                    new_when = run_at.strftime("%d.%m.%Y %H:%M")
+
+                    old_pids = old.get("product_ids") or []
+                    if not isinstance(old_pids, list):
+                        old_pids = []
+                    old_pids_clean = [str(x or "").strip() for x in old_pids if str(x or "").strip()]
+
+                    old_titles = old.get("titles") or []
+                    if not isinstance(old_titles, list):
+                        old_titles = []
+                    old_titles_clean = [str(t or "").strip() for t in old_titles if str(t or "").strip()]
+
+                    old_count = len(old_titles_clean) or len(old_pids_clean)
+                    new_count = len(product_ids)
+
                     msg = QMessageBox(self)
+                    msg.setIcon(QMessageBox.Question)
                     msg.setWindowTitle("iiko")
                     msg.setText("Уже есть запланированное открытие.")
-                    msg.setInformativeText("Заменить его новым списком?")
+                    msg.setInformativeText(
+                        f"Сейчас запланировано: {old_when}. Блюд: {old_count}.\n"
+                        f"Выбрано сейчас: {new_count}. (Дата в календаре: {target.strftime('%d.%m.%Y')}, будет {new_when})\n\n"
+                        "Добавить — добавит блюда к уже запланированным (дата останется прежней).\n"
+                        "Заменить — перезапишет список (и дату возьмёт из календаря)."
+                    )
+                    try:
+                        msg.setTextFormat(Qt.PlainText)
+                    except Exception:
+                        pass
+
+                    if old_titles_clean:
+                        try:
+                            msg.setDetailedText("\n".join(old_titles_clean))
+                        except Exception:
+                            pass
+
+                    btn_add = msg.addButton("Добавить", QMessageBox.AcceptRole)
                     btn_replace = msg.addButton("Заменить", QMessageBox.DestructiveRole)
-                    btn_cancel = msg.addButton("Отмена", QMessageBox.RejectRole)
+                    msg.addButton("Отмена", QMessageBox.RejectRole)
+                    try:
+                        msg.setDefaultButton(btn_add)
+                    except Exception:
+                        pass
+
                     msg.exec()
-                    if msg.clickedButton() != btn_replace:
+                    clicked = msg.clickedButton()
+
+                    if clicked == btn_add:
+                        # Merge: сначала старые, потом новые (без дублей)
+                        old_title_by_pid: dict[str, str] = {}
+                        try:
+                            for idx, pid in enumerate(old_pids_clean):
+                                if not pid:
+                                    continue
+                                t = ""
+                                if idx < len(old_titles):
+                                    t = str(old_titles[idx] or "").strip()
+                                if pid not in old_title_by_pid:
+                                    old_title_by_pid[pid] = t
+                        except Exception:
+                            old_title_by_pid = {}
+
+                        new_title_by_pid: dict[str, str] = {}
+                        try:
+                            for idx, pid in enumerate(product_ids):
+                                pid_s = str(pid or "").strip()
+                                if not pid_s:
+                                    continue
+                                t = ""
+                                if idx < len(titles):
+                                    t = str(titles[idx] or "").strip()
+                                if pid_s not in new_title_by_pid:
+                                    new_title_by_pid[pid_s] = t
+                        except Exception:
+                            new_title_by_pid = {}
+
+                        merged_pids: List[str] = []
+                        seen: set[str] = set()
+                        for pid in (old_pids_clean + list(product_ids)):
+                            pid_s = str(pid or "").strip()
+                            if not pid_s or pid_s in seen:
+                                continue
+                            merged_pids.append(pid_s)
+                            seen.add(pid_s)
+
+                        merged_titles: List[str] = []
+                        for pid in merged_pids:
+                            t = old_title_by_pid.get(pid)
+                            if t is None:
+                                t = new_title_by_pid.get(pid)
+                            merged_titles.append(str(t or "").strip())
+
+                        added_count = max(0, len(merged_pids) - len(old_pids_clean))
+                        product_ids = merged_pids
+                        titles = merged_titles
+
+                        # Дату оставляем прежнюю, если она корректно распарсилась
+                        run_at = old_dt or run_at
+
+                    elif clicked != btn_replace:
                         return
 
-                run_at = datetime.combine(target, time(0, 1))
                 job = {
                     "state": "pending",
                     "run_at": run_at.isoformat(timespec="seconds"),
@@ -3844,6 +4215,13 @@ class MainWindow(QMainWindow):
                     "titles": titles,
                     "created_at": datetime.now().isoformat(timespec="seconds"),
                 }
+                if added_count is not None:
+                    try:
+                        job["updated_at"] = datetime.now().isoformat(timespec="seconds")
+                        job["added_count"] = int(added_count)
+                    except Exception:
+                        pass
+
                 self._save_open_schedule_job(job)
 
                 # Пытаемся создать задачу Планировщика Windows, чтобы сработало даже если приложение закрыто.
@@ -3854,6 +4232,20 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     sched_ok, sched_err = False, str(e)
 
+                prefix = ""
+                try:
+                    if added_count is not None:
+                        prefix = f"Добавлено блюд: {int(added_count)}. Всего блюд: {len(product_ids)}.\n"
+                except Exception:
+                    prefix = ""
+
+                try:
+                    when_date = run_at.strftime('%d.%m.%Y')
+                    when_time = run_at.strftime('%H:%M')
+                except Exception:
+                    when_date = target.strftime('%d.%m.%Y')
+                    when_time = "00:01"
+
                 if sched_ok:
                     task_name = ""
                     try:
@@ -3862,14 +4254,14 @@ class MainWindow(QMainWindow):
                         task_name = ""
 
                     info = (
-                        f"Запланировано на {target.strftime('%d.%m.%Y')} (00:01).\n"
+                        f"{prefix}Запланировано на {when_date} ({when_time}).\n"
                         "Сработает автоматически (Планировщик Windows).\n"
                         + (f"Задача: {task_name}\n" if task_name else "")
                         + "Компьютер должен быть включён."
                     )
                 else:
                     info = (
-                        f"Запланировано на {target.strftime('%d.%m.%Y')} (00:01).\n"
+                        f"{prefix}Запланировано на {when_date} ({when_time}).\n"
                         "Не удалось создать задачу Планировщика Windows — откроется при следующем запуске приложения после наступления времени.\n"
                         f"Причина: {sched_err}"
                     )
@@ -4034,7 +4426,25 @@ class MainWindow(QMainWindow):
         key = self._pl_key(d.name)
         if not key:
             return
+
+        # Если блюдо уже было выбрано — обновляем строку (вес/цена), но не удаляем из списка.
         if key in self._pricelist_selected_keys:
+            try:
+                for i in range(self.lstSelectedDishes.count()):
+                    it = self.lstSelectedDishes.item(i)
+                    old = it.data(Qt.UserRole)
+                    if isinstance(old, DishItem) and self._pl_key(old.name) == key:
+                        prev_state = it.checkState()
+                        it.setData(Qt.UserRole, d)
+                        it.setText(self._format_dish_line(d))
+                        it.setCheckState(prev_state)
+                        break
+            except Exception:
+                pass
+            try:
+                self._sort_pricelist_selected_list()
+            except Exception:
+                pass
             return
 
         it = QListWidgetItem(self._format_dish_line(d))
@@ -4043,6 +4453,10 @@ class MainWindow(QMainWindow):
         it.setCheckState(Qt.Checked)
         self.lstSelectedDishes.addItem(it)
         self._pricelist_selected_keys.add(key)
+        try:
+            self._sort_pricelist_selected_list()
+        except Exception:
+            pass
 
     def _on_pricelist_suggestion_clicked(self, item: QListWidgetItem):
         try:
