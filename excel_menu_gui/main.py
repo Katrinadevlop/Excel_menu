@@ -546,8 +546,11 @@ class MainWindow(QMainWindow):
         btns_layout.addWidget(self.btnShowAllDishes)
         btns_layout.addStretch(1)
 
-        self.lstDishSuggestions = QListWidget()
-        self.lstDishSuggestions.setMinimumHeight(220)
+        # Подсказки/список блюд (выпадающий список поверх UI — не в layout)
+        self.lstDishSuggestions = QListWidget(self)
+        self.lstDishSuggestions.setWindowFlags(Qt.Popup)
+        self.lstDishSuggestions.setFocusPolicy(Qt.NoFocus)
+        self.lstDishSuggestions.hide()
         self.lstDishSuggestions.itemClicked.connect(self._on_pricelist_suggestion_clicked)
         self.lstDishSuggestions.itemDoubleClicked.connect(self._on_pricelist_suggestion_clicked)
 
@@ -559,12 +562,9 @@ class MainWindow(QMainWindow):
 
         pricelist_box = QWidget(); pricelist_layout = QVBoxLayout(pricelist_box)
         pricelist_layout.addWidget(src_row)
-        pricelist_layout.addWidget(label_caption("Поиск блюда"))
         pricelist_layout.addWidget(self.edDishSearch)
         pricelist_layout.addWidget(self.lblPricelistInfo)
         pricelist_layout.addWidget(btns_row)
-        pricelist_layout.addWidget(label_caption("Подсказки (кликните, чтобы добавить)"))
-        pricelist_layout.addWidget(self.lstDishSuggestions)
         pricelist_layout.addWidget(label_caption("Выбранные блюда (с галочками)"))
         pricelist_layout.addWidget(self.lstSelectedDishes)
         pricelist_layout.addWidget(self.btnClearSelectedDishes)
@@ -583,11 +583,9 @@ class MainWindow(QMainWindow):
         self._open_iiko_products: List[Any] = []
         self._open_selected_ids: set[str] = set()
 
-        self.lblTomorrowInfo = QLabel(
-            "Введите название блюда — появятся подсказки из iiko.\n"
-            "Кликните по подсказке, чтобы добавить в список.\n"
-            "Поставьте галочки и нажмите «Открыть отмеченные» (снимем со стоп-листа)."
-        )
+        # Инфо-строка (показываем только когда есть статус/ошибка; подсказки по UI не показываем)
+        self.lblTomorrowInfo = QLabel("")
+        self.lblTomorrowInfo.setVisible(False)
 
         self.edTomorrowSearch = QLineEdit()
         self.edTomorrowSearch.setPlaceholderText("Начните вводить название блюда… (Enter — добавить)")
@@ -1709,14 +1707,108 @@ class MainWindow(QMainWindow):
     def _hide_open_suggestions(self) -> None:
         self._set_open_suggestions_visible(False)
 
+    def _set_tomorrow_info(self, text: str) -> None:
+        """Показывает/скрывает строку статуса в разделе "Открыть блюда"."""
+        try:
+            if not hasattr(self, "lblTomorrowInfo"):
+                return
+            t = (text or "").strip()
+            self.lblTomorrowInfo.setText(t)
+            self.lblTomorrowInfo.setVisible(bool(t))
+        except Exception:
+            pass
+
+    def _set_pricelist_suggestions_visible(self, visible: bool) -> None:
+        """Показать/скрыть выпадающий список блюд для "Ценники" (popup)."""
+        try:
+            if not hasattr(self, "lstDishSuggestions"):
+                return
+
+            if not visible:
+                self.lstDishSuggestions.hide()
+                return
+
+            anchor = getattr(self, "edDishSearch", None)
+            if anchor is None:
+                return
+
+            # ширина: как у списка выбранных (или группы)
+            w = 0
+            try:
+                if hasattr(self, "lstSelectedDishes") and self.lstSelectedDishes.isVisible():
+                    w = int(self.lstSelectedDishes.width())
+            except Exception:
+                w = 0
+            if not w:
+                try:
+                    if hasattr(self, "grpPricelist") and self.grpPricelist.isVisible():
+                        w = int(self.grpPricelist.width())
+                except Exception:
+                    w = 0
+            if not w:
+                w = 520
+            try:
+                self.lstDishSuggestions.setFixedWidth(max(320, w))
+            except Exception:
+                pass
+
+            # высота: до 10 строк или максимум 360px
+            try:
+                cnt = max(1, int(self.lstDishSuggestions.count()))
+                rows = min(cnt, 10)
+                row_h = self.lstDishSuggestions.sizeHintForRow(0)
+                if not row_h:
+                    row_h = max(24, int(self.lstDishSuggestions.fontMetrics().height()) + 8)
+                h = min(360, rows * row_h + 2 * int(self.lstDishSuggestions.frameWidth()))
+                self.lstDishSuggestions.setFixedHeight(h)
+            except Exception:
+                pass
+
+            try:
+                gp = anchor.mapToGlobal(QPoint(0, anchor.height()))
+            except Exception:
+                gp = None
+
+            if gp is not None:
+                # если внизу не помещается — покажем сверху
+                try:
+                    screen = QGuiApplication.screenAt(gp) or QGuiApplication.primaryScreen()
+                    if screen is not None:
+                        geo = screen.availableGeometry()
+
+                        x = gp.x()
+                        if x + self.lstDishSuggestions.width() > geo.right():
+                            x = max(geo.left(), geo.right() - self.lstDishSuggestions.width())
+
+                        y = gp.y()
+                        if y + self.lstDishSuggestions.height() > geo.bottom():
+                            y = anchor.mapToGlobal(QPoint(0, -self.lstDishSuggestions.height())).y()
+
+                        gp = QPoint(x, y)
+                except Exception:
+                    pass
+
+                try:
+                    self.lstDishSuggestions.move(gp)
+                except Exception:
+                    pass
+
+            self.lstDishSuggestions.show()
+            self.lstDishSuggestions.raise_()
+
+        except Exception:
+            pass
+
+    def _hide_pricelist_suggestions(self) -> None:
+        try:
+            self._set_pricelist_suggestions_visible(False)
+        except Exception:
+            pass
+
     def eventFilter(self, obj, event):
-        # Скрываем "выпадающие" подсказки для "Открыть блюда", если кликнули вне поиска/списка.
+        # Скрываем выпадающие списки (popup) при клике вне них.
         try:
             if event.type() == QEvent.MouseButtonPress:
-                # работаем только когда открыт раздел "Открыть блюда"
-                if not getattr(self, "grpTomorrowOpen", None) or (not self.grpTomorrowOpen.isVisible()):
-                    return super().eventFilter(obj, event)
-
                 # глобальная позиция клика
                 try:
                     gp = event.globalPosition().toPoint()  # Qt6
@@ -1731,28 +1823,47 @@ class MainWindow(QMainWindow):
                     except Exception:
                         return False
 
-                inside_search = _inside(getattr(self, "edTomorrowSearch", None))
-                inside_suggestions = _inside(getattr(self, "lstTomorrowDishes", None))
+                # ===== Открыть блюда =====
+                if getattr(self, "grpTomorrowOpen", None) and self.grpTomorrowOpen.isVisible():
+                    if getattr(self, "lstTomorrowDishes", None):
+                        inside_search = _inside(getattr(self, "edTomorrowSearch", None))
+                        inside_suggestions = _inside(getattr(self, "lstTomorrowDishes", None))
 
-                # Клик в поиске или в подсказках — не прячем
-                if inside_search:
-                    # если подсказки были скрыты, а текст уже введён — покажем снова
-                    try:
-                        if (not self.lstTomorrowDishes.isVisible()) and len((self.edTomorrowSearch.text() or "").strip()) >= 2:
-                            self._update_open_suggestions(self.edTomorrowSearch.text())
-                    except Exception:
-                        pass
-                    return super().eventFilter(obj, event)
+                        if inside_search:
+                            # если подсказки скрыты, но текст уже введён — покажем снова
+                            try:
+                                if (not self.lstTomorrowDishes.isVisible()) and len((self.edTomorrowSearch.text() or "").strip()) >= 2:
+                                    self._update_open_suggestions(self.edTomorrowSearch.text())
+                            except Exception:
+                                pass
+                        else:
+                            # клик вне поиска -> закрываем подсказки (если они показаны)
+                            try:
+                                if self.lstTomorrowDishes.isVisible() and (not inside_suggestions):
+                                    self._hide_open_suggestions()
+                            except Exception:
+                                pass
 
-                if inside_suggestions:
-                    return super().eventFilter(obj, event)
+                # ===== Ценники =====
+                if getattr(self, "grpPricelist", None) and self.grpPricelist.isVisible():
+                    if getattr(self, "lstDishSuggestions", None):
+                        inside_search = _inside(getattr(self, "edDishSearch", None))
+                        inside_suggestions = _inside(getattr(self, "lstDishSuggestions", None))
 
-                # кликнули куда-то ещё — скрываем подсказки (если они показаны)
-                try:
-                    if self.lstTomorrowDishes.isVisible():
-                        self._hide_open_suggestions()
-                except Exception:
-                    pass
+                        if inside_search:
+                            # если список скрыт, но текст уже введён — покажем снова
+                            try:
+                                if (not self.lstDishSuggestions.isVisible()) and len((self.edDishSearch.text() or "").strip()) >= 2:
+                                    self._update_pricelist_suggestions(self.edDishSearch.text())
+                            except Exception:
+                                pass
+                        else:
+                            # клик вне поиска -> закрываем подсказки (если они показаны)
+                            try:
+                                if self.lstDishSuggestions.isVisible() and (not inside_suggestions):
+                                    self._hide_pricelist_suggestions()
+                            except Exception:
+                                pass
 
         except Exception:
             pass
@@ -1794,6 +1905,10 @@ class MainWindow(QMainWindow):
                 self.tomorrowOpenActionsPanel.setVisible(True)
 
             # Сброс состояния
+            try:
+                self._hide_pricelist_suggestions()
+            except Exception:
+                pass
             self._tomorrow_menu_dishes = []
             self._open_selected_ids = set()
             self.edTomorrowSearch.clear()
@@ -1802,11 +1917,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, "lstTomorrowSelectedDishes"):
                 self.lstTomorrowSelectedDishes.clear()
 
-            self.lblTomorrowInfo.setText(
-                "Введите название блюда — появятся подсказки из iiko.\n"
-                "Кликните по подсказке, чтобы добавить в список.\n"
-                "Поставьте галочки и нажмите «Открыть отмеченные» (снимем со стоп-листа)."
-            )
+            self._set_tomorrow_info("")
 
             try:
                 self.edTomorrowSearch.setFocus()
@@ -1846,6 +1957,10 @@ class MainWindow(QMainWindow):
                 self.grpTomorrowOpen.setVisible(False)
             if hasattr(self, "tomorrowOpenActionsPanel"):
                 self.tomorrowOpenActionsPanel.setVisible(False)
+            try:
+                self._hide_open_suggestions()
+            except Exception:
+                pass
 
             # Показываем панель ценников
             if hasattr(self, "grpPricelist"):
@@ -1853,9 +1968,17 @@ class MainWindow(QMainWindow):
             if hasattr(self, "pricelistActionsPanel"):
                 self.pricelistActionsPanel.setVisible(True)
 
+            try:
+                self._hide_pricelist_suggestions()
+            except Exception:
+                pass
+
             # Сброс состояния выбора (номенклатуру оставляем в кэше, чтобы не заставлять пользователя "загружать" вручную)
             self._pricelist_selected_keys = set()
-            self.edDishSearch.clear()
+            try:
+                self.edDishSearch.clear()
+            except Exception:
+                pass
             self.lstDishSuggestions.clear()
             self.lstSelectedDishes.clear()
 
@@ -2325,12 +2448,12 @@ class MainWindow(QMainWindow):
                 if not self._can_autoload_iiko_products():
                     QMessageBox.warning(self, "iiko", "Сначала нажмите 'Авторизация точки'.")
                     return
-                self.lblTomorrowInfo.setText("Загружаю блюда из iiko…")
+                self._set_tomorrow_info("Загружаю блюда из iiko…")
                 self._load_open_iiko_products()
 
             self.lstTomorrowDishes.clear()
             if not self._open_iiko_products:
-                self.lblTomorrowInfo.setText("Список блюд пуст")
+                self._set_tomorrow_info("Список блюд пуст")
                 return
 
             limit = 500
@@ -2342,12 +2465,12 @@ class MainWindow(QMainWindow):
             self._set_open_suggestions_visible(self.lstTomorrowDishes.count() > 0)
 
             if len(self._open_iiko_products) > limit:
-                self.lblTomorrowInfo.setText(
+                self._set_tomorrow_info(
                     f"Загружено из iiko: {len(self._open_iiko_products)} (показаны первые {limit}). "
                     "Введите 2+ символа для поиска."
                 )
             else:
-                self.lblTomorrowInfo.setText(f"Загружено из iiko: {len(self._open_iiko_products)}")
+                self._set_tomorrow_info(f"Загружено из iiko: {len(self._open_iiko_products)}")
 
         except IikoApiError as e:
             QMessageBox.critical(self, "iiko", str(e))
@@ -2366,14 +2489,14 @@ class MainWindow(QMainWindow):
         # Автозагрузка номенклатуры при первом поиске
         if (not self._open_iiko_products) and self._can_autoload_iiko_products():
             try:
-                self.lblTomorrowInfo.setText("Загружаю блюда из iiko…")
+                self._set_tomorrow_info("Загружаю блюда из iiko…")
                 self._load_open_iiko_products()
             except Exception:
                 pass
             return
 
         if not self._open_iiko_products:
-            self.lblTomorrowInfo.setText(
+            self._set_tomorrow_info(
                 "Список блюд не загружен. Нажмите «Авторизация точки» и попробуйте снова."
             )
             return
@@ -2391,10 +2514,10 @@ class MainWindow(QMainWindow):
 
         if shown:
             self._set_open_suggestions_visible(True)
-            self.lblTomorrowInfo.setText(f"Найдено: {shown} (показаны первые 30)")
+            self._set_tomorrow_info(f"Найдено: {shown} (показаны первые 30)")
         else:
             self._hide_open_suggestions()
-            self.lblTomorrowInfo.setText("Совпадений не найдено")
+            self._set_tomorrow_info("Совпадений не найдено")
 
     def _add_open_selected(self, p: Any):
         pid = (getattr(p, "product_id", "") or "").strip()
@@ -2430,7 +2553,7 @@ class MainWindow(QMainWindow):
         try:
             if not self._open_iiko_products:
                 try:
-                    self.lblTomorrowInfo.setText("Загружаю блюда из iiko…")
+                    self._set_tomorrow_info("Загружаю блюда из iiko…")
                     self._load_open_iiko_products()
                 except Exception:
                     pass
@@ -2529,7 +2652,7 @@ class MainWindow(QMainWindow):
                 self.lstTomorrowDishes.addItem(it)
 
             total = self.lstTomorrowDishes.count()
-            self.lblTomorrowInfo.setText(
+            self._set_tomorrow_info(
                 f"Загружено из Excel: {total}. Не найдено в iiko: {not_found}. "
                 "Поставьте галочку у найденных — блюдо откроется (снимем со стоп-листа)."
             )
@@ -2675,7 +2798,11 @@ class MainWindow(QMainWindow):
             dishes = [DishItem(name=p.name, weight=p.weight, price=p.price) for p in products]
             self._pricelist_dishes = dishes
             self.lblPricelistInfo.setText(f"Загружено из iiko: {len(dishes)}")
-            self._update_pricelist_suggestions(self.edDishSearch.text())
+            # Поле ввода скрыто — подсказки обновляем только если текст введён программно
+            try:
+                self._update_pricelist_suggestions(self.edDishSearch.text())
+            except Exception:
+                pass
         except IikoApiError as e:
             QMessageBox.critical(self, "iiko", str(e))
         except Exception as e:
@@ -2692,6 +2819,7 @@ class MainWindow(QMainWindow):
 
             self.lstDishSuggestions.clear()
             if not self._pricelist_dishes:
+                self._hide_pricelist_suggestions()
                 return
 
             # Чтобы UI не зависал на огромной номенклатуре
@@ -2700,6 +2828,8 @@ class MainWindow(QMainWindow):
                 item = QListWidgetItem(self._format_dish_line(d))
                 item.setData(Qt.UserRole, d)
                 self.lstDishSuggestions.addItem(item)
+
+            self._set_pricelist_suggestions_visible(self.lstDishSuggestions.count() > 0)
 
             if len(self._pricelist_dishes) > limit:
                 self.lblPricelistInfo.setText(
@@ -2718,6 +2848,7 @@ class MainWindow(QMainWindow):
 
         q = (text or "").strip().lower().replace('ё', 'е')
         if len(q) < 2:
+            self._hide_pricelist_suggestions()
             return
 
         # Автозагрузка подсказок: если авторизация точки уже сделана.
@@ -2748,8 +2879,10 @@ class MainWindow(QMainWindow):
                     break
 
         if shown:
+            self._set_pricelist_suggestions_visible(True)
             self.lblPricelistInfo.setText(f"Найдено: {shown} (показаны первые 30)")
         else:
+            self._hide_pricelist_suggestions()
             self.lblPricelistInfo.setText("Совпадений не найдено")
 
     def _add_pricelist_selected(self, d: DishItem):
@@ -2771,6 +2904,7 @@ class MainWindow(QMainWindow):
             d = item.data(Qt.UserRole)
             if isinstance(d, DishItem):
                 self._add_pricelist_selected(d)
+            self._hide_pricelist_suggestions()
         except Exception:
             pass
 
@@ -2796,6 +2930,7 @@ class MainWindow(QMainWindow):
             for d in self._pricelist_dishes:
                 if self._pl_key(d.name) == q:
                     self._add_pricelist_selected(d)
+                    self._hide_pricelist_suggestions()
                     return
 
             # 2) иначе — первый элемент подсказок
@@ -2804,6 +2939,7 @@ class MainWindow(QMainWindow):
                 d = it.data(Qt.UserRole)
                 if isinstance(d, DishItem):
                     self._add_pricelist_selected(d)
+                    self._hide_pricelist_suggestions()
                     return
 
             QMessageBox.information(self, "Не найдено", "По вашему запросу нет совпадений в загруженном меню.")
