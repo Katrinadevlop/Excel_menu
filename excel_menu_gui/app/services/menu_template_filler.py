@@ -1726,10 +1726,82 @@ class MenuTemplateFiller:
                     tpl_ws.cell(row=rr, column=6).value = new_f
 
 
-            # Обновляем дату в верхней части «Кассы» из источника (добавляем день недели)
+            # Обновляем дату в верхней части «Кассы» из источника.
+            # Важно: в меню часто пишут «12 сентября - пятница» без года.
+            # Если вычислять день недели от текущего года, получится нестабильно.
+            # Поэтому сначала пытаемся взять день недели прямо из текста.
             try:
-                menu_date = self.extract_date_from_menu(source_menu_path)
-                self.update_template_date(tpl_ws, menu_date, include_weekday=True)
+                weekdays_full = [
+                    'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'
+                ]
+                weekdays_short = {
+                    'пн': 'понедельник',
+                    'вт': 'вторник',
+                    'ср': 'среда',
+                    'чт': 'четверг',
+                    'пт': 'пятница',
+                    'сб': 'суббота',
+                    'вс': 'воскресенье',
+                }
+                month_words = [
+                    'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+                    'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
+                ]
+
+                # 1) Ищем строку с датой в верхнем блоке (обычно A1)
+                header_text = None
+                for r in range(1, 6):
+                    for c in range(1, 7):
+                        vv = src_ws.cell(row=r, column=c).value
+                        if vv is None:
+                            continue
+                        ss = str(vv).strip()
+                        if not ss:
+                            continue
+                        s_norm = ss.lower().replace('ё', 'е')
+                        if any(mw in s_norm for mw in month_words) and _re.search(r"\d{1,2}\s+\w+", s_norm):
+                            header_text = s_norm
+                            break
+                    if header_text:
+                        break
+
+                parsed_day = None
+                parsed_month_word = None
+                parsed_weekday = None
+
+                if header_text:
+                    # день недели (полное слово)
+                    for w in weekdays_full:
+                        if w in header_text:
+                            parsed_weekday = w
+                            break
+                    # день недели (сокращение)
+                    if not parsed_weekday:
+                        for short, full in weekdays_short.items():
+                            if _re.search(rf"(^|[^а-я]){short}([^а-я]|$)", header_text):
+                                parsed_weekday = full
+                                break
+
+                    # день + месяц
+                    m = _re.search(
+                        r"(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)",
+                        header_text,
+                    )
+                    if m:
+                        parsed_day = int(m.group(1))
+                        parsed_month_word = m.group(2)
+
+                if parsed_day and parsed_month_word:
+                    try:
+                        if parsed_weekday:
+                            tpl_ws.cell(row=2, column=2).value = parsed_weekday  # B2
+                        tpl_ws.cell(row=3, column=2).value = f"{parsed_day} {parsed_month_word}"  # B3
+                    except Exception:
+                        pass
+                else:
+                    # fallback: как раньше (по datetime)
+                    menu_date = self.extract_date_from_menu(source_menu_path)
+                    self.update_template_date(tpl_ws, menu_date, include_weekday=True)
             except Exception:
                 pass
 

@@ -26,6 +26,129 @@ def _safe_str(v: Any) -> str:
     return str(v).strip()
 
 
+def _extract_name_from_product_dict(it: Dict[str, Any]) -> str:
+    """Пытается достать человекочитаемое название продукта из разных вариантов ответов API."""
+    if not isinstance(it, dict):
+        return ""
+
+    for k in ("name", "fullName", "productName", "productFullName", "caption", "title"):
+        v = it.get(k)
+        if v not in (None, ""):
+            s = _safe_str(v)
+            if s:
+                return s
+
+    # иногда продукт лежит внутри обертки
+    for k in ("product", "item", "data", "entity"):
+        v = it.get(k)
+        if isinstance(v, dict):
+            s = _extract_name_from_product_dict(v)
+            if s:
+                return s
+
+    return ""
+
+
+def _extract_id_from_product_dict(it: Dict[str, Any]) -> str:
+    if not isinstance(it, dict):
+        return ""
+
+    for k in ("id", "productId", "product_id", "productID", "itemId", "guid"):
+        v = it.get(k)
+        if v not in (None, ""):
+            s = _safe_str(v)
+            if s:
+                return s
+
+    for k in ("product", "item", "data", "entity"):
+        v = it.get(k)
+        if isinstance(v, dict):
+            s = _extract_id_from_product_dict(v)
+            if s:
+                return s
+
+    return ""
+
+
+def _extract_price_value(raw: Any) -> str:
+    if raw is None:
+        return ""
+
+    if isinstance(raw, (int, float)):
+        if isinstance(raw, float) and raw.is_integer():
+            return str(int(raw))
+        return str(raw)
+
+    if isinstance(raw, str):
+        return raw.strip()
+
+    if isinstance(raw, dict):
+        for k in (
+            "currentPrice",
+            "value",
+            "price",
+            "basePrice",
+            "defaultPrice",
+            "amount",
+        ):
+            if k in raw and raw.get(k) not in (None, ""):
+                v = _extract_price_value(raw.get(k))
+                if v:
+                    return v
+
+        for k in ("prices", "sizePrices"):
+            v = raw.get(k)
+            if isinstance(v, list) and v:
+                return _extract_price_value(v[0])
+
+        return ""
+
+    if isinstance(raw, list):
+        if not raw:
+            return ""
+        return _extract_price_value(raw[0])
+
+    return _safe_str(raw)
+
+
+def _extract_price_from_product_dict(it: Dict[str, Any]) -> str:
+    if not isinstance(it, dict):
+        return ""
+
+    for pk in ("price", "defaultPrice", "basePrice"):
+        if pk in it and it.get(pk) not in (None, ""):
+            v = _extract_price_value(it.get(pk))
+            if v:
+                return v
+
+    sp = it.get("sizePrices")
+    if isinstance(sp, list) and sp and isinstance(sp[0], dict):
+        v = _extract_price_value(sp[0].get("price") or sp[0].get("value"))
+        if v:
+            return v
+
+    for k in ("product", "item", "data", "entity"):
+        v = it.get(k)
+        if isinstance(v, dict):
+            p = _extract_price_from_product_dict(v)
+            if p:
+                return p
+
+    return ""
+
+
+def _iter_dicts(obj: Any, *, max_depth: int = 6, _depth: int = 0):
+    if _depth > max_depth:
+        return
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from _iter_dicts(v, max_depth=max_depth, _depth=_depth + 1)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _iter_dicts(v, max_depth=max_depth, _depth=_depth + 1)
+
+
 def _is_timeout_error(err: Exception) -> bool:
     s = str(err).lower()
     return ("timed out" in s) or ("timeout" in s) or ("handshake" in s)
@@ -186,9 +309,12 @@ class IikoCloudV1Client:
         url = f"{self.api_url}/api/1/nomenclature"
 
         # Чаще всего это POST.
+        # Важно: некоторые инсталляции iikoCloud без startRevision возвращают только дельту/частичный ответ.
+        # Для нашего сценария (поиск/ценники) почти всегда нужна ПОЛНАЯ номенклатура, поэтому сначала
+        # запрашиваем с startRevision=0, а затем пробуем более «мягкие» варианты.
         candidates = [
-            ("POST", {"organizationId": org_id}),
             ("POST", {"organizationId": org_id, "startRevision": 0}),
+            ("POST", {"organizationId": org_id}),
             ("GET", None),
         ]
 
@@ -251,24 +377,27 @@ class IikoCloudV1Client:
 
         out: List[IikoProduct] = []
         for it in items:
-            name = _safe_str(it.get("name") or it.get("fullName"))
+            name = _extract_name_from_product_dict(it)
             if not name:
                 continue
 
-            product_id = _safe_str(it.get("id") or it.get("productId"))
-
-            price = ""
-            for pk in ("price", "defaultPrice", "basePrice"):
-                if it.get(pk) not in (None, ""):
-                    price = _safe_str(it.get(pk))
-                    break
-
-            if not price:
-                sp = it.get("sizePrices")
-                if isinstance(sp, list) and sp and isinstance(sp[0], dict):
-                    price = _safe_str(sp[0].get("price") or sp[0].get("value"))
+            product_id = _extract_id_from_product_dict(it)
+            price = _extract_price_from_product_dict(it)
 
             out.append(IikoProduct(name=name, price=price, product_id=product_id))
+
+        # Fallback: если продуктов получилось подозрительно мало — пробуем рекурсивно найти их в ответе.
+        if len(out) <= 1 and isinstance(data, (dict, list)):
+            extra: List[IikoProduct] = []
+            for dct in _iter_dicts(data, max_depth=7):
+                nm = _extract_name_from_product_dict(dct)
+                pid = _extract_id_from_product_dict(dct)
+                if not nm or not pid:
+                    continue
+                pr = _extract_price_from_product_dict(dct)
+                extra.append(IikoProduct(name=nm, price=pr, product_id=pid))
+            if extra:
+                out.extend(extra)
 
         # uniq by name
         seen = set()

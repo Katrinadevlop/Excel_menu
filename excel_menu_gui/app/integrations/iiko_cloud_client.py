@@ -251,22 +251,39 @@ class IikoCloudClient:
 
         candidates = [
             f"{self.api_url}/api/0/organization/list?{urlencode({'access_token': token})}",
+            # На некоторых версиях/шлюзах встречается альтернативный роут.
             f"{self.api_url}/api/0/organizations?{urlencode({'access_token': token})}",
         ]
 
-        last_err: Optional[str] = None
         data: Any = None
+        errors: List[str] = []
         for url in candidates:
             try:
                 data = _http_get_json(url)
-                last_err = None
+                errors = []
                 break
             except Exception as e:
-                last_err = str(e)
+                errors.append(str(e))
                 continue
 
-        if last_err:
-            raise IikoApiError(f"Не удалось получить список организаций: {last_err}")
+        if errors:
+            # Частая ситуация: токен/секрет неверный -> первый эндпоинт отдаёт 401,
+            # а второй может отдавать 404, что сбивает с толку. Покажем более полезную ошибку.
+            for err in errors:
+                low = err.lower()
+                if ("401" in low) or ("403" in low) or ("unauthorized" in low) or ("forbidden" in low):
+                    raise IikoApiError(
+                        "Не удалось получить список организаций (ошибка авторизации). "
+                        f"{err}"
+                    )
+
+            tried = ", ".join([_redact_url(u) for u in candidates])
+            if len(errors) == 1:
+                raise IikoApiError(f"Не удалось получить список организаций. Пробовали: {tried}. Ошибка: {errors[0]}")
+            raise IikoApiError(
+                "Не удалось получить список организаций. "
+                f"Пробовали: {tried}. Ошибки: {errors[0]} | {errors[1]}"
+            )
 
         out: List[IikoOrganization] = []
         if isinstance(data, list):

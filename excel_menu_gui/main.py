@@ -30,6 +30,7 @@ from app.reports.brokerage_journal import create_brokerage_journal_from_menu
 from app.reports.pricelist_excel import create_pricelist_xlsx
 from app.services.dish_extractor import extract_all_dishes_with_details, DishItem
 from app.integrations.iiko_rms_client import IikoRmsClient, IikoApiError
+from app.integrations.iiko_cloud_client import IikoCloudClient as IikoTransportClient
 from app.integrations.iiko_cloud_v1_client import IikoCloudV1Client, IikoOrganization
 from app.services.menu_template_filler import MenuTemplateFiller
 from tools.fill_dynamic_menu import fill_dynamic_menu
@@ -178,6 +179,9 @@ class MainWindow(QMainWindow):
     def _reset_iiko_auth_settings(self) -> None:
         """Сбрасывает сохранённые данные авторизации iiko (чтобы не подставлялись старые секреты/хэши)."""
         keys = [
+            # общие
+            "iiko/mode",
+
             # iikoCloud v1
             "iiko/cloud/api_url",
             "iiko/cloud/api_login",
@@ -185,7 +189,7 @@ class MainWindow(QMainWindow):
             "iiko/cloud/org_id",
             "iiko/cloud/org_name",
 
-            # legacy iiko.biz
+            # iikoTransport (legacy iiko.biz)
             "iiko/biz/user_secret",
             "iiko/biz/user_id",
             "iiko/biz/access_token",
@@ -193,7 +197,9 @@ class MainWindow(QMainWindow):
             "iiko/biz/org_name",
             "iiko/biz/api_url",
 
-            # REST
+            # REST (/resto)
+            "iiko/base_url",
+            "iiko/login",
             "iiko/pass_sha1",
             "iiko/password",
         ]
@@ -205,19 +211,25 @@ class MainWindow(QMainWindow):
 
         # сбрасываем кэш-поля в рантайме
         try:
+            self._iiko_mode = "cloud"
+
             self._iiko_cloud_api_url = "https://api-ru.iiko.services"
             self._iiko_cloud_api_login = ""
             self._iiko_cloud_access_token = ""
             self._iiko_cloud_org_id = ""
             self._iiko_cloud_org_name = ""
 
-            # legacy iiko.biz
+            # iikoTransport (legacy iiko.biz)
             self._iiko_biz_user_secret = ""
             self._iiko_biz_user_id = "pos_login_f13591ea"
             self._iiko_biz_org_id = ""
             self._iiko_biz_org_name = ""
             self._iiko_biz_api_url = "https://iiko.biz:9900"
             self._iiko_biz_access_token = ""
+
+            # REST (/resto)
+            self._iiko_base_url = ""
+            self._iiko_login = ""
             self._iiko_pass_sha1_cached = ""
         except Exception:
             pass
@@ -308,10 +320,10 @@ class MainWindow(QMainWindow):
         self.layTop.addWidget(self.btnDownloadTemplate)
         self.layTop.addWidget(self.btnMakePresentation)
         self.layTop.addWidget(self.btnBrokerage)
-        # Временно скрываем кнопки iiko (авторизация/открыть/ценники) с панели
-        # self.layTop.addWidget(self.btnOpenMenu)
-        # self.layTop.addWidget(self.btnOpenTomorrowDishes)
-        # self.layTop.addWidget(self.btnDownloadPricelists)
+        # iiko: авторизация/открыть блюда/ценники
+        self.layTop.addWidget(self.btnOpenMenu)
+        self.layTop.addWidget(self.btnOpenTomorrowDishes)
+        self.layTop.addWidget(self.btnDownloadPricelists)
         self.layTop.addWidget(self.btnDocuments)
 
         # Apply centralized stylesheet (already set in StyleManager.setup_main_window)
@@ -476,7 +488,7 @@ class MainWindow(QMainWindow):
         self._iiko_mode = str(self._settings.value("iiko/mode", "cloud"))  # cloud | rest
 
         # REST (resto)
-        self._iiko_base_url = str(self._settings.value("iiko/base_url", "https://287-772-687.iiko.it/resto"))
+        self._iiko_base_url = str(self._settings.value("iiko/base_url", "https://patriot-co.iiko.it/resto"))
         self._iiko_login = str(self._settings.value("iiko/login", "user"))
         # Храним только sha1-хэш пароля (как требует iikoRMS resto API).
         self._iiko_pass_sha1_cached = str(self._settings.value("iiko/pass_sha1", ""))
@@ -516,10 +528,12 @@ class MainWindow(QMainWindow):
         self.edDishSearch.textChanged.connect(self._update_pricelist_suggestions)
         self.edDishSearch.returnPressed.connect(self._add_pricelist_from_enter)
 
-        self.lblPricelistInfo = QLabel("1) Нажмите 'Загрузить блюда'  2) Введите название")
+        self.lblPricelistInfo = QLabel("Введите название блюда (загрузка из iiko — автоматически)")
 
+        # Кнопку ручной загрузки оставляем, но скрываем: список подтягивается автоматически при поиске.
         self.btnLoadDishes = QPushButton("Загрузить блюда")
         self.btnLoadDishes.clicked.connect(self._load_pricelist_dishes)
+        self.btnLoadDishes.setVisible(False)
 
         self.btnShowAllDishes = QPushButton("Показать все блюда")
         self.btnShowAllDishes.clicked.connect(self._show_all_pricelist_dishes)
@@ -1022,13 +1036,21 @@ class MainWindow(QMainWindow):
             self.edExcelPath.setText(path)
 
     def do_authorize_point(self):
-        """Авторизация iikoCloud API v1 (api-ru.iiko.services) через apiLogin."""
+        """Авторизация точки iiko.
+
+        Поддерживает:
+        - iikoRMS REST (/resto)
+        - iikoCloud API v1 (api-ru.iiko.services) через apiLogin
+        - iikoTransport (iiko.biz:9900) через user_id/user_secret
+        """
         try:
             # Явно предлагаем "Сбросить" перед вводом, чтобы точно убрать старые данные.
             msg = QMessageBox(self)
             msg.setWindowTitle("iiko")
             msg.setText("Перед авторизацией:")
-            msg.setInformativeText("Можно сбросить сохранённый логин/пароль/токен, чтобы приложение не использовало старые данные.")
+            msg.setInformativeText(
+                "Можно сбросить сохранённые данные, чтобы приложение не использовало старые токены/пароли."
+            )
             btn_reset = msg.addButton("Сбросить", QMessageBox.DestructiveRole)
             btn_continue = msg.addButton("Продолжить", QMessageBox.AcceptRole)
             msg.addButton("Отмена", QMessageBox.RejectRole)
@@ -1042,6 +1064,172 @@ class MainWindow(QMainWindow):
             elif clicked != btn_continue:
                 return
 
+            # Выбор способа подключения
+            methods = [
+                "iikoRMS REST (/resto)",
+                "iikoCloud API v1 (apiLogin, api-ru.iiko.services)",
+                "iikoTransport (user_id/user_secret, iiko.biz:9900)",
+            ]
+            cur_mode = (self._iiko_mode or "cloud").strip().lower()
+            if cur_mode in ("biz", "transport", "iikobiz", "iiko.biz"):
+                default_idx = 2
+            elif cur_mode in ("rest", "rms", "resto"):
+                default_idx = 0
+            else:
+                default_idx = 1
+            chosen, ok = QInputDialog.getItem(
+                self,
+                "iiko",
+                "Способ подключения:",
+                methods,
+                default_idx,
+                False,
+            )
+            if not ok:
+                return
+
+            # ===== iikoRMS REST (/resto) =====
+            if chosen.startswith("iikoRMS"):
+                base_url_default = (self._iiko_base_url or "").strip() or "https://patriot-co.iiko.it/resto"
+                base_url = self._prompt_text(
+                    "iiko — REST (/resto)",
+                    "Base URL (пример: https://patriot-co.iiko.it/resto)\r\n(двойной клик в поле = вставить из буфера обмена):",
+                    QLineEdit.Normal,
+                    default_text=base_url_default,
+                )
+                if not base_url:
+                    return
+
+                login_default = (self._iiko_login or "").strip()
+                login = self._prompt_text(
+                    "iiko — REST (/resto)",
+                    "Логин iikoOffice (пользователь)\r\n(двойной клик в поле = вставить из буфера обмена):",
+                    QLineEdit.Normal,
+                    default_text=login_default,
+                )
+                if not login:
+                    return
+
+                # Сохраняем параметры и получаем/сохраняем sha1 пароля
+                self._iiko_mode = "rest"
+                self._iiko_base_url = base_url
+                self._iiko_login = login
+
+                # попросим пароль (сохраняем только sha1)
+                if not self._ensure_iiko_pass_sha1():
+                    return
+
+                # Проверка авторизации (быстро): получаем auth key
+                client = IikoRmsClient(
+                    base_url=self._iiko_base_url,
+                    login=self._iiko_login,
+                    pass_sha1=self._iiko_pass_sha1_cached,
+                )
+                client.auth_key()
+
+                # сбросим кэши номенклатуры
+                self._iiko_products_by_key = {}
+                self._pricelist_dishes = []
+
+                try:
+                    self._settings.setValue("iiko/mode", "rest")
+                    self._settings.setValue("iiko/base_url", self._iiko_base_url)
+                    self._settings.setValue("iiko/login", self._iiko_login)
+                except Exception:
+                    pass
+
+                QMessageBox.information(self, "iiko", "REST подключён. Теперь можно загружать блюда.")
+                return
+
+            # ===== iikoTransport (iiko.biz:9900) =====
+            if chosen.startswith("iikoTransport"):
+                api_url_default = (self._iiko_biz_api_url or "").strip() or "https://iiko.biz:9900"
+                api_url = self._prompt_text(
+                    "iiko — iikoTransport",
+                    "API URL (обычно https://iiko.biz:9900)\r\n(двойной клик в поле = вставить из буфера обмена):",
+                    QLineEdit.Normal,
+                    default_text=api_url_default,
+                )
+                if not api_url:
+                    return
+
+                user_id_default = (self._iiko_biz_user_id or "").strip() or "pos_login_f13591ea"
+                user_id = self._prompt_text(
+                    "iiko — iikoTransport",
+                    "user_id\r\n(двойной клик в поле = вставить из буфера обмена):",
+                    QLineEdit.Normal,
+                    default_text=user_id_default,
+                )
+                if not user_id:
+                    return
+
+                user_secret = self._prompt_text(
+                    "iiko — iikoTransport",
+                    "user_secret\r\n(двойной клик в поле = вставить из буфера обмена):",
+                    QLineEdit.Password,
+                )
+                if not user_secret:
+                    return
+
+                client = IikoTransportClient(api_url=api_url, user_id=user_id, user_secret=user_secret)
+                access_token = client.access_token()
+
+                # показываем токен (можно скопировать)
+                self._show_access_token_dialog(access_token)
+
+                orgs = client.organizations()
+                org_id = ""
+                org_name = ""
+                if len(orgs) == 1:
+                    org_id = orgs[0].id
+                    org_name = orgs[0].name
+                else:
+                    labels = [f"{i+1}. {o.name} ({o.id})" for i, o in enumerate(orgs)]
+                    chosen_org, ok = QInputDialog.getItem(
+                        self,
+                        "iiko — iikoTransport",
+                        "Выберите организацию:",
+                        labels,
+                        0,
+                        False,
+                    )
+                    if not ok:
+                        return
+                    idx = labels.index(chosen_org)
+                    org_id = orgs[idx].id
+                    org_name = orgs[idx].name
+
+                self._iiko_mode = "biz"
+                self._iiko_biz_api_url = api_url
+                self._iiko_biz_user_id = user_id
+                self._iiko_biz_user_secret = user_secret
+                self._iiko_biz_access_token = access_token
+                self._iiko_biz_org_id = org_id
+                self._iiko_biz_org_name = org_name
+
+                # сбросим кэши номенклатуры
+                self._iiko_products_by_key = {}
+                self._pricelist_dishes = []
+
+                try:
+                    self._settings.setValue("iiko/mode", "biz")
+                    self._settings.setValue("iiko/biz/api_url", api_url)
+                    self._settings.setValue("iiko/biz/user_id", user_id)
+                    self._settings.setValue("iiko/biz/user_secret", user_secret)
+                    self._settings.setValue("iiko/biz/access_token", access_token)
+                    self._settings.setValue("iiko/biz/org_id", org_id)
+                    if org_name:
+                        self._settings.setValue("iiko/biz/org_name", org_name)
+                except Exception:
+                    pass
+
+                if org_name:
+                    QMessageBox.information(self, "iiko", f"Подключено: {org_name} ({org_id})")
+                else:
+                    QMessageBox.information(self, "iiko", f"Подключено. organization_id: {org_id}")
+                return
+
+            # ===== iikoCloud API v1 (api-ru.iiko.services) =====
             api_url = (self._iiko_cloud_api_url or "").strip() or "https://api-ru.iiko.services"
 
             api_login_default = (self._iiko_cloud_api_login or "").strip()
@@ -1060,17 +1248,15 @@ class MainWindow(QMainWindow):
             # показываем токен (можно скопировать)
             self._show_access_token_dialog(access_token)
 
-            # Организации
             orgs = client.organizations()
             org_id = ""
             org_name = ""
-
             if len(orgs) == 1:
                 org_id = orgs[0].id
                 org_name = orgs[0].name
             else:
                 labels = [f"{i+1}. {o.name} ({o.id})" for i, o in enumerate(orgs)]
-                chosen, ok = QInputDialog.getItem(
+                chosen_org, ok = QInputDialog.getItem(
                     self,
                     "iiko — iikoCloud",
                     "Выберите организацию:",
@@ -1080,11 +1266,9 @@ class MainWindow(QMainWindow):
                 )
                 if not ok:
                     return
-                idx = labels.index(chosen)
+                idx = labels.index(chosen_org)
                 org_id = orgs[idx].id
                 org_name = orgs[idx].name
-
-            QMessageBox.information(self, "iiko", f"Подключено к организации: {org_name}")
 
             self._iiko_mode = "cloud"
             self._iiko_cloud_api_url = api_url
@@ -1093,8 +1277,7 @@ class MainWindow(QMainWindow):
             self._iiko_cloud_org_id = org_id
             self._iiko_cloud_org_name = org_name
 
-            # Важно: если меняли пароль — сбросим сохранённые кэши номенклатуры.
-
+            # сбросим кэши номенклатуры
             self._iiko_products_by_key = {}
             self._pricelist_dishes = []
 
@@ -1109,11 +1292,10 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-            # Покажем, куда подключились
             if org_name:
-                QMessageBox.information(self, "iiko", f"iiko.biz подключено: {org_name} ({org_id})")
+                QMessageBox.information(self, "iiko", f"Подключено: {org_name} ({org_id})")
             else:
-                QMessageBox.information(self, "iiko", f"iiko.biz подключено. organization_id: {org_id}")
+                QMessageBox.information(self, "iiko", f"Подключено. organization_id: {org_id}")
 
         except IikoApiError as e:
             QMessageBox.critical(self, "iiko", str(e))
@@ -1497,26 +1679,33 @@ class MainWindow(QMainWindow):
             if hasattr(self, "pricelistActionsPanel"):
                 self.pricelistActionsPanel.setVisible(True)
 
-            # Сброс состояния
-            self._pricelist_dishes = []
+            # Сброс состояния выбора (номенклатуру оставляем в кэше, чтобы не заставлять пользователя "загружать" вручную)
             self._pricelist_selected_keys = set()
-            self.lblPricelistInfo.setText("1) Нажмите 'Загрузить блюда'  2) Начните ввод")
             self.edDishSearch.clear()
             self.lstDishSuggestions.clear()
             self.lstSelectedDishes.clear()
-
 
             try:
                 self.edDishSearch.setFocus()
             except Exception:
                 pass
 
-            # Автозагрузка блюд из iiko: если авторизация точки уже сделана
-            try:
-                if (not self._pricelist_dishes) and self._can_autoload_iiko_products():
-                    self._load_pricelist_dishes()
-            except Exception:
-                pass
+            # Автозагрузка блюд из iiko при входе в раздел (если уже есть авторизация)
+            if not self._pricelist_dishes:
+                self.lblPricelistInfo.setText("Загружаю блюда из iiko…")
+                try:
+                    if self._can_autoload_iiko_products():
+                        self._load_pricelist_dishes()
+                    else:
+                        self.lblPricelistInfo.setText(
+                            "Введите название блюда (если список пустой — нажмите «Авторизация точки»)"
+                        )
+                except Exception:
+                    self.lblPricelistInfo.setText(
+                        "Введите название блюда (если список пустой — нажмите «Авторизация точки»)"
+                    )
+            else:
+                self.lblPricelistInfo.setText(f"Загружено из iiko: {len(self._pricelist_dishes)}")
 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
@@ -1777,11 +1966,26 @@ class MainWindow(QMainWindow):
     def _can_autoload_iiko_products(self) -> bool:
         """Есть ли сохранённые данные, чтобы на вкладках не просить ввод заново."""
         mode = (self._iiko_mode or "cloud").strip().lower()
-        if mode == "cloud":
+
+        # iikoCloud API v1
+        if mode in ("cloud", "cloud_v1", "cloudv1", "v1"):
             return bool(
                 (self._iiko_cloud_api_login or "").strip()
                 and (self._iiko_cloud_org_id or "").strip()
+                and (self._iiko_cloud_access_token or "").strip()
             )
+
+        # iikoTransport (iiko.biz:9900)
+        if mode in ("biz", "transport", "iikobiz", "iiko.biz"):
+            org_ok = bool((self._iiko_biz_org_id or "").strip())
+            token_ok = bool((self._iiko_biz_access_token or "").strip())
+            creds_ok = bool(
+                (self._iiko_biz_user_id or "").strip()
+                and (self._iiko_biz_user_secret or "").strip()
+            )
+            return org_ok and (token_ok or creds_ok)
+
+        # REST (/resto)
         return bool(
             (self._iiko_base_url or "").strip()
             and (self._iiko_login or "").strip()
@@ -1789,16 +1993,20 @@ class MainWindow(QMainWindow):
         )
 
     def _get_iiko_products(self) -> List[Any]:
-        """Возвращает список продуктов iiko в зависимости от выбранного режима (REST/Cloud).
+        """Возвращает список продуктов iiko в зависимости от выбранного режима.
 
-        Для iikoCloud теперь работаем ТОЛЬКО с уже сохранённым access_token:
-        - не ходим повторно на /api/1/access_token;
-        - если токена нет — просим нажать «Авторизация точки»;
-        - если токен перестал работать (401/403 и т.п.) — показываем ошибку, без автопереавторизации.
+        Поддерживается:
+        - iikoCloud API v1 (api-ru.iiko.services) через apiLogin/access_token
+        - iikoTransport (iiko.biz:9900) через user_id/user_secret (или сохранённый access_token)
+        - REST (/resto)
+
+        Для Cloud/Transport работаем с уже сохранённым access_token.
+        Если он протух — попросим переавторизоваться.
         """
         mode = (self._iiko_mode or "cloud").strip().lower()
 
-        if mode == "cloud":
+        # ===== iikoCloud API v1 =====
+        if mode in ("cloud", "cloud_v1", "cloudv1", "v1"):
             api_url = (self._iiko_cloud_api_url or "").strip() or "https://api-ru.iiko.services"
             api_login = (self._iiko_cloud_api_login or "").strip()
             org_id = (self._iiko_cloud_org_id or "").strip()
@@ -1818,10 +2026,67 @@ class MainWindow(QMainWindow):
                 organization_id=org_id,
                 access_token=token,
             )
-            # Если токен протух — просто покажем ошибку пользователю.
             return client.get_products()
 
-        # REST
+        # ===== iikoTransport (iiko.biz:9900) =====
+        if mode in ("biz", "transport", "iikobiz", "iiko.biz"):
+            api_url = (self._iiko_biz_api_url or "").strip() or "https://iiko.biz:9900"
+            user_id = (self._iiko_biz_user_id or "").strip()
+            user_secret = (self._iiko_biz_user_secret or "").strip()
+            org_id = (self._iiko_biz_org_id or "").strip()
+            token = (self._iiko_biz_access_token or "").strip()
+
+            if not org_id:
+                raise IikoApiError("Не выбрана организация. Нажмите 'Авторизация точки'.")
+
+            if not token and not (user_id and user_secret):
+                raise IikoApiError(
+                    "Не задан user_id/user_secret или access_token iikoTransport. Сначала нажмите 'Авторизация точки'."
+                )
+
+            client = IikoTransportClient(
+                api_url=api_url,
+                user_id=user_id,
+                user_secret=user_secret,
+                organization_id=org_id,
+                access_token=token,
+            )
+            try:
+                products = client.get_products()
+            except IikoApiError as e:
+                # Частый случай: протух токен. Если есть user_secret — попробуем обновить токен один раз.
+                low = str(e).lower()
+                if ("http 401" in low or "http 403" in low) and (user_id and user_secret):
+                    client2 = IikoTransportClient(
+                        api_url=api_url,
+                        user_id=user_id,
+                        user_secret=user_secret,
+                        organization_id=org_id,
+                    )
+                    products = client2.get_products()
+                    # Сохраним новый токен
+                    try:
+                        new_token = client2.access_token()
+                        if new_token:
+                            self._iiko_biz_access_token = new_token
+                            self._settings.setValue("iiko/biz/access_token", new_token)
+                    except Exception:
+                        pass
+                else:
+                    raise
+
+            # Сохраним токен (если он получился в процессе) — чтобы быстрее работало дальше.
+            try:
+                tok = client.access_token()
+                if tok and tok != token:
+                    self._iiko_biz_access_token = tok
+                    self._settings.setValue("iiko/biz/access_token", tok)
+            except Exception:
+                pass
+
+            return products
+
+        # ===== REST (/resto) =====
         if not self._ensure_iiko_pass_sha1():
             raise IikoApiError("Не задан SHA1-хэш пароля для REST. Нажмите 'Авторизация точки'.")
 
@@ -2094,14 +2359,20 @@ class MainWindow(QMainWindow):
         if len(q) < 2:
             return
 
-        # Автозагрузка подсказок: только если авторизация точки уже сделана
+        # Автозагрузка подсказок: если авторизация точки уже сделана.
+        # Важно: если загрузили — _load_pricelist_dishes() сам обновит подсказки.
         if (not self._pricelist_dishes) and self._can_autoload_iiko_products():
             try:
+                self.lblPricelistInfo.setText("Загружаю блюда из iiko…")
                 self._load_pricelist_dishes()
             except Exception:
                 pass
+            return
 
         if not self._pricelist_dishes:
+            self.lblPricelistInfo.setText(
+                "Список блюд не загружен. Нажмите «Авторизация точки» и попробуйте снова."
+            )
             return
 
         shown = 0
@@ -2114,6 +2385,11 @@ class MainWindow(QMainWindow):
                 shown += 1
                 if shown >= 30:
                     break
+
+        if shown:
+            self.lblPricelistInfo.setText(f"Найдено: {shown} (показаны первые 30)")
+        else:
+            self.lblPricelistInfo.setText("Совпадений не найдено")
 
     def _add_pricelist_selected(self, d: DishItem):
         key = self._pl_key(d.name)
@@ -2140,9 +2416,15 @@ class MainWindow(QMainWindow):
     def _add_pricelist_from_enter(self):
         """Enter в поле поиска: добавляем точное совпадение или первый пункт из подсказок."""
         try:
+            # Если список ещё не загружен — пробуем загрузить автоматически.
             if not self._pricelist_dishes:
-                QMessageBox.warning(self, "Внимание", "Сначала нажмите 'Загрузить блюда'.")
-                return
+                try:
+                    self.lblPricelistInfo.setText("Загружаю блюда из iiko…")
+                    self._load_pricelist_dishes()
+                except Exception:
+                    pass
+                if not self._pricelist_dishes:
+                    return
 
             q_raw = (self.edDishSearch.text() or "").strip()
             if not q_raw:
