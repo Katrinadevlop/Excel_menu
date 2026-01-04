@@ -18,6 +18,7 @@ from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.worksheet.worksheet import Worksheet
 from openpyxl.utils import get_column_letter
+from openpyxl.styles import Border, PatternFill
 
 LEFT_HEADERS = [
     "ЗАВТРАКИ",
@@ -495,10 +496,13 @@ def place_footer_rows_below_last_item(
     footer_styles: List[Tuple[List[Tuple], float | None]],
     row_from: int,
     row_to: int,
-) -> None:
-    """Ставит строки дисклеймера сразу после последней строки с данными (с учётом обеих половин)."""
+) -> Tuple[int, int] | None:
+    """Ставит строки дисклеймера сразу после последней строки с данными (с учётом обеих половин).
+
+    Возвращает (start_row, end_row) вставленного футера.
+    """
     if not footer_texts:
-        return
+        return None
 
     last_left = _last_nonempty_row(ws, cols=(1, 2, 3), row_from=row_from, row_to=row_to)
     last_right = _last_nonempty_row(ws, cols=(4, 5, 6), row_from=row_from, row_to=row_to)
@@ -538,6 +542,57 @@ def place_footer_rows_below_last_item(
             ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=6)
         except Exception:
             pass
+
+    return insert_at, insert_at + len(footer_texts) - 1
+
+
+def clear_borders_on_blank_rows(ws: Worksheet, row_from: int, cols: Tuple[int, ...] = (1, 2, 3, 4, 5, 6)) -> None:
+    """Убирает обводку (border) на полностью пустых строках.
+
+    Нужно, чтобы пустые строки ниже дисклеймера не выглядели как часть таблицы.
+    """
+    empty_border = Border()
+    for r in range(row_from, ws.max_row + 1):
+        if all(is_blank_value(ws.cell(row=r, column=c).value) for c in cols):
+            for c in cols:
+                ws.cell(row=r, column=c).border = empty_border
+
+
+
+def clear_fill_on_blank_side_cells(
+    ws: Worksheet,
+    row_from: int,
+    row_to: int,
+    left_cols: Tuple[int, ...] = (1, 2, 3),
+    right_cols: Tuple[int, ...] = (4, 5, 6),
+) -> None:
+    """Убирает заливку (fill) у пустой половины строки, если другая половина заполнена.
+
+    Иначе могут оставаться артефакты шаблона (например, зелёная заливка от футера) в пустых ячейках.
+    """
+    empty_fill = PatternFill()
+    for r in range(row_from, row_to + 1):
+        left_blank = all(is_blank_value(ws.cell(row=r, column=c).value) for c in left_cols)
+        right_blank = all(is_blank_value(ws.cell(row=r, column=c).value) for c in right_cols)
+        left_has = any(not is_blank_value(ws.cell(row=r, column=c).value) for c in left_cols)
+        right_has = any(not is_blank_value(ws.cell(row=r, column=c).value) for c in right_cols)
+
+        # Если строка заполнена только справа — делаем A:C белыми
+        if left_blank and right_has:
+            for c in left_cols:
+                cell = ws.cell(row=r, column=c)
+                if isinstance(cell, MergedCell):
+                    continue
+                cell.fill = empty_fill
+
+        # Если строка заполнена только слева — делаем D:F белыми
+        if right_blank and left_has:
+            for c in right_cols:
+                cell = ws.cell(row=r, column=c)
+                if isinstance(cell, MergedCell):
+                    continue
+                cell.fill = empty_fill
+
 
 
 def compact_menu_table_sides(ws: Worksheet, segments: List[Segment]) -> None:
@@ -605,13 +660,28 @@ def fill_dynamic_menu(
     # Это аналог Excel: Delete cells -> Shift up только в A:C и отдельно только в D:F.
     compact_menu_table_sides(tpl_ws, tpl_segments)
 
-    place_footer_rows_below_last_item(
+    footer_range = place_footer_rows_below_last_item(
         tpl_ws,
         footer_texts=footer_texts,
         footer_styles=footer_styles,
         row_from=row_from,
         row_to=row_to,
     )
+
+    # После переноса футера иногда остаются пустые строки со "сеткой" (border) ниже.
+    # Их нужно сделать визуально пустыми (как в исходном шаблоне).
+    if footer_range:
+        footer_start, footer_end = footer_range
+
+        # Строки, где заполнена только правая часть (или только левая),
+        # должны выглядеть пустыми на второй половине (без цветной заливки).
+        clear_fill_on_blank_side_cells(tpl_ws, row_from=row_from, row_to=footer_start - 1)
+
+        # После переноса футера иногда остаются пустые строки со "сеткой" (border) ниже.
+        # Их нужно сделать визуально пустыми (как в исходном шаблоне).
+        clear_borders_on_blank_rows(tpl_ws, row_from=footer_end + 1)
+    else:
+        clear_fill_on_blank_side_cells(tpl_ws, row_from=row_from, row_to=row_to)
 
     tpl_wb.save(output_path)
 
