@@ -5,6 +5,7 @@ import logging
 import hashlib
 import json
 import subprocess
+import calendar
 from dataclasses import dataclass
 from datetime import datetime, date, time
 from pathlib import Path
@@ -1141,15 +1142,15 @@ class MainWindow(QMainWindow):
         self.btnVacationStatement.clicked.connect(self.open_vacation_statement)
         StyleManager.style_action_button(self.btnVacationStatement)
 
-        self.btnMedicalBooks = QPushButton("Открыть медкнижки (Excel)")
+        self.btnMedicalBooks = QPushButton("Медкнижки")
         self.btnMedicalBooks.clicked.connect(self.open_med_books)
         StyleManager.style_action_button(self.btnMedicalBooks)
 
-        self.btnBirthdayFile = QPushButton("Открыть файл \"День рождения\"")
+        self.btnBirthdayFile = QPushButton("День рождения")
         self.btnBirthdayFile.clicked.connect(self.open_birthday_file)
         StyleManager.style_action_button(self.btnBirthdayFile)
 
-        self.btnHygieneJournal = QPushButton("Открыть гигиенический журнал")
+        self.btnHygieneJournal = QPushButton("Гигиенический журнал")
         self.btnHygieneJournal.clicked.connect(self.open_hygiene_journal)
         StyleManager.style_action_button(self.btnHygieneJournal)
 
@@ -1202,45 +1203,70 @@ class MainWindow(QMainWindow):
         self.btnCashTemplate.clicked.connect(self.open_cash_template)
         StyleManager.style_action_button(self.btnCashTemplate)
 
-        # Кнопки "Документы" не должны растягиваться на всю ширину.
-        def _docs_add_button(btn: QPushButton) -> None:
-            row = QWidget()
-            lay = QHBoxLayout(row)
-            LayoutStyles.apply_margins(lay, LayoutStyles.NO_MARGINS)
+        # Кнопки "Документы": 2 колонки, одинаковый размер
+        try:
+            docs_grid_box = QWidget()
+            docs_grid = QGridLayout(docs_grid_box)
+            LayoutStyles.apply_margins(docs_grid, LayoutStyles.NO_MARGINS)
+            docs_grid.setHorizontalSpacing(AppStyles.CONTENT_SPACING)
+            docs_grid.setVerticalSpacing(AppStyles.CONTENT_SPACING)
+
+            # Приведём подписи к коротким названиям (без кавычек/"Excel")
             try:
-                lay.addWidget(btn, 0, Qt.AlignLeft)
+                self.btnCashTemplate.setText("Наличка")
             except Exception:
-                lay.addWidget(btn)
-            lay.addStretch(1)
-            docs_layout.addWidget(row)
+                pass
 
-        # Категории
-        docs_layout.addWidget(label_caption("Персонал / Кадры"))
-        _docs_add_button(self.btnVacationStatement)
-        _docs_add_button(self.btnMedicalBooks)
-        _docs_add_button(self.btnBirthdayFile)
-        _docs_add_button(self.btnDirection)
+            doc_buttons: List[QPushButton] = [
+                self.btnVacationStatement,
+                self.btnMedicalBooks,
+                self.btnBirthdayFile,
+                self.btnDirection,
+                self.btnLockerDoc,
+                self.btnHygieneJournal,
+                self.btnFridgeTemp,
+                self.btnFreezerTemp,
+                self.btnFryerJournal,
+                self.btnBreakfasts,
+                self.btnDistribution,
+                self.btnPieNames,
+                self.btnBakeryPricelist,
+                self.btnCashTemplate,
+                self.btnBuffetSheet,
+                self.btnBakerSheet,
+            ]
 
-        docs_layout.addSpacing(AppStyles.CONTENT_SPACING)
-        docs_layout.addWidget(label_caption("Санитария и контроль"))
-        _docs_add_button(self.btnHygieneJournal)
-        _docs_add_button(self.btnFridgeTemp)
-        _docs_add_button(self.btnFreezerTemp)
-        _docs_add_button(self.btnFryerJournal)
+            btn_w = 360
+            btn_h = 40
+            for i, b in enumerate(doc_buttons):
+                try:
+                    b.setFixedSize(btn_w, btn_h)
+                except Exception:
+                    pass
+                docs_grid.addWidget(b, i // 2, i % 2)
 
-        docs_layout.addSpacing(AppStyles.CONTENT_SPACING)
-        docs_layout.addWidget(label_caption("Производство"))
-        _docs_add_button(self.btnBreakfasts)
-        _docs_add_button(self.btnDistribution)
-        _docs_add_button(self.btnPieNames)
-        _docs_add_button(self.btnBakeryPricelist)
-        _docs_add_button(self.btnCashTemplate)
-        _docs_add_button(self.btnBuffetSheet)
-        _docs_add_button(self.btnBakerSheet)
-
-        docs_layout.addSpacing(AppStyles.CONTENT_SPACING)
-        docs_layout.addWidget(label_caption("Помещения"))
-        _docs_add_button(self.btnLockerDoc)
+            docs_layout.addWidget(docs_grid_box)
+        except Exception:
+            # fallback: если что-то пошло не так — оставим вертикально
+            try:
+                docs_layout.addWidget(self.btnVacationStatement)
+                docs_layout.addWidget(self.btnMedicalBooks)
+                docs_layout.addWidget(self.btnBirthdayFile)
+                docs_layout.addWidget(self.btnDirection)
+                docs_layout.addWidget(self.btnLockerDoc)
+                docs_layout.addWidget(self.btnHygieneJournal)
+                docs_layout.addWidget(self.btnFridgeTemp)
+                docs_layout.addWidget(self.btnFreezerTemp)
+                docs_layout.addWidget(self.btnFryerJournal)
+                docs_layout.addWidget(self.btnBreakfasts)
+                docs_layout.addWidget(self.btnDistribution)
+                docs_layout.addWidget(self.btnPieNames)
+                docs_layout.addWidget(self.btnBakeryPricelist)
+                docs_layout.addWidget(self.btnCashTemplate)
+                docs_layout.addWidget(self.btnBuffetSheet)
+                docs_layout.addWidget(self.btnBakerSheet)
+            except Exception:
+                pass
 
         docs_layout.addStretch(1)
 
@@ -2383,6 +2409,29 @@ class MainWindow(QMainWindow):
                 ws["A1"].value = a1_value
             except Exception:
                 # если лист защищён/ошибка записи — всё равно попробуем открыть исходник
+                pass
+
+            # Подставим даты на текущий месяц/год и спрячем лишние дни.
+            try:
+                days_in_month = int(calendar.monthrange(int(now.year), int(now.month))[1])
+                first_day_row = 3  # в шаблоне даты начинаются с A3
+                max_days_rows = 31
+
+                for day in range(1, max_days_rows + 1):
+                    r = first_day_row + day - 1
+                    if day <= days_in_month:
+                        ws.cell(row=r, column=1).value = datetime(int(now.year), int(now.month), int(day), 0, 0, 0)
+                        try:
+                            ws.row_dimensions[r].hidden = False
+                        except Exception:
+                            pass
+                    else:
+                        ws.cell(row=r, column=1).value = None
+                        try:
+                            ws.row_dimensions[r].hidden = True
+                        except Exception:
+                            pass
+            except Exception:
                 pass
 
             try:
