@@ -34,6 +34,7 @@ from app.gui.theme import ThemeMode, apply_theme, start_system_theme_watcher
 from app.reports.presentation_handler import create_presentation_with_excel_data
 from app.reports.brokerage_journal import create_brokerage_journal_from_menu
 from app.reports.pricelist_excel import create_pricelist_xlsx
+from app.reports.iikochain_pricetag_merge import merge_iikochain_big_pricetags
 from app.services.dish_extractor import extract_all_dishes_with_details, DishItem
 from app.integrations.iiko_rms_client import IikoRmsClient, IikoApiError
 from app.integrations.iiko_cloud_client import IikoCloudClient as IikoTransportClient
@@ -548,6 +549,43 @@ class IikoProductsLoadWorker(QObject):
         }
 
 
+class ChainPriceTagsMergeWorker(QObject):
+    """Объединяет iikoChain-выгрузки ценников ("Большой ценник") в один файл.
+
+    Делает это через Excel COM, чтобы сохранить форматирование и merged cells.
+    """
+
+    finished = Signal(int, str)  # seq, output_path
+    failed = Signal(int, str)    # seq, error
+
+    def __init__(self, seq: int, input_paths: List[str], output_path: str):
+        super().__init__()
+        self.seq = int(seq)
+        self.input_paths = list(input_paths or [])
+        self.output_path = str(output_path or "")
+
+    def run(self) -> None:
+        pythoncom = None
+        try:
+            try:
+                import pythoncom as _pythoncom
+                _pythoncom.CoInitialize()
+                pythoncom = _pythoncom
+            except Exception:
+                pythoncom = None
+
+            merge_iikochain_big_pricetags(self.input_paths, self.output_path)
+            self.finished.emit(self.seq, self.output_path)
+        except Exception as e:
+            self.failed.emit(self.seq, str(e))
+        finally:
+            try:
+                if pythoncom is not None:
+                    pythoncom.CoUninitialize()
+            except Exception:
+                pass
+
+
 class MainWindow(QMainWindow):
     def _show_access_token_dialog(self, token: str) -> None:
         """Показывает access_token и даёт кнопку 'Скопировать'."""
@@ -967,6 +1005,12 @@ class MainWindow(QMainWindow):
         self._open_show_all_requested: bool = False
         self._pricelist_show_all_requested: bool = False
 
+        # ===== iikoChain: объединение выгрузок ценников (.xls) =====
+        self._chain_pricetags_merge_loading: bool = False
+        self._chain_pricetags_merge_seq: int = 0
+        self._chain_pricetags_merge_thread: Optional[QThread] = None
+        self._chain_pricetags_merge_worker: Optional[ChainPriceTagsMergeWorker] = None
+
         src_row = QWidget(); src_layout = QHBoxLayout(src_row)
         LayoutStyles.apply_margins(src_layout, LayoutStyles.NO_MARGINS)
         src_layout.addWidget(QLabel("Источник: iiko"))
@@ -1278,9 +1322,17 @@ class MainWindow(QMainWindow):
         self.pricelistActionsPanel = QWidget(); self.pricelistActionsPanel.setObjectName("actionsPanel")
         self.pricelistActionsLayout = QHBoxLayout(self.pricelistActionsPanel)
         LayoutStyles.apply_margins(self.pricelistActionsLayout, LayoutStyles.CONTENT_TOP_MARGIN)
+
+        # 1) iikoChain-выгрузки ("Большой ценник") -> объединение
+        self.btnMergeChainPricetags = QPushButton("Объединить ценники (iikoChain)")
+        self.btnMergeChainPricetags.clicked.connect(self.do_merge_chain_pricetags)
+
+        # 2) Встроенный формат (openpyxl)
         self.btnCreatePricelist = QPushButton("Сформировать ценники (Excel)")
         self.btnCreatePricelist.clicked.connect(self.do_create_pricelist_excel)
+
         self.pricelistActionsLayout.addStretch(1)
+        self.pricelistActionsLayout.addWidget(self.btnMergeChainPricetags)
         self.pricelistActionsLayout.addWidget(self.btnCreatePricelist)
         self.rootLayout.addWidget(self.pricelistActionsPanel)
         self.pricelistActionsPanel.setVisible(False)
@@ -4813,6 +4865,144 @@ class MainWindow(QMainWindow):
             create_pricelist_xlsx(selected, save_path)
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
+
+    def do_merge_chain_pricetags(self):
+        """Объединить выгрузки iikoChain ("Большой ценник" в .xls/.xlsx) в один файл."""
+        try:
+            files, _ = QFileDialog.getOpenFileNames(
+                self,
+                "Выберите выгрузки ценников iikoChain",
+                str(Path.home() / "Desktop"),
+                "Excel (*.xls *.xlsx);;Все файлы (*.*)",
+            )
+            if not files:
+                return
+
+            desktop = Path.home() / "Desktop"
+            stamp = datetime.now().strftime("%d.%m.%Y")
+            suggested_out = str(desktop / f"ценники_iikoChain_{stamp}.xls")
+
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Сохранить объединённые ценники",
+                suggested_out,
+                "Excel (*.xls *.xlsx);;Все файлы (*.*)",
+            )
+            if not save_path:
+                return
+
+            self._start_chain_pricetags_merge(files, save_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _start_chain_pricetags_merge(self, input_paths: List[str], output_path: str) -> None:
+        """Старт объединения iikoChain ценников в фоне (QThread)."""
+        try:
+            if getattr(self, "_chain_pricetags_merge_loading", False):
+                return
+            self._chain_pricetags_merge_loading = True
+
+            self._chain_pricetags_merge_seq = int(getattr(self, "_chain_pricetags_merge_seq", 0)) + 1
+            seq = int(self._chain_pricetags_merge_seq)
+
+            try:
+                self.lblPricelistInfo.setText("Объединяю ценники iikoChain…")
+            except Exception:
+                pass
+
+            try:
+                if hasattr(self, "btnMergeChainPricetags"):
+                    self.btnMergeChainPricetags.setEnabled(False)
+            except Exception:
+                pass
+
+            thread = QThread(self)
+            worker = ChainPriceTagsMergeWorker(seq, list(input_paths or []), str(output_path or ""))
+            worker.moveToThread(thread)
+
+            thread.started.connect(worker.run)
+            worker.finished.connect(self._on_chain_pricetags_merge_finished)
+            worker.failed.connect(self._on_chain_pricetags_merge_failed)
+
+            worker.finished.connect(thread.quit)
+            worker.failed.connect(thread.quit)
+            worker.finished.connect(worker.deleteLater)
+            worker.failed.connect(worker.deleteLater)
+            thread.finished.connect(thread.deleteLater)
+
+            self._chain_pricetags_merge_thread = thread
+            self._chain_pricetags_merge_worker = worker
+
+            thread.start()
+        except Exception as e:
+            self._chain_pricetags_merge_loading = False
+            try:
+                if hasattr(self, "btnMergeChainPricetags"):
+                    self.btnMergeChainPricetags.setEnabled(True)
+            except Exception:
+                pass
+            raise e
+
+    def _on_chain_pricetags_merge_finished(self, seq: int, output_path: str) -> None:
+        try:
+            self._chain_pricetags_merge_loading = False
+            self._chain_pricetags_merge_thread = None
+            self._chain_pricetags_merge_worker = None
+
+            # устаревший результат — не применяем
+            if int(seq) != int(getattr(self, "_chain_pricetags_merge_seq", 0)):
+                return
+
+            try:
+                if hasattr(self, "btnMergeChainPricetags"):
+                    self.btnMergeChainPricetags.setEnabled(True)
+            except Exception:
+                pass
+
+            try:
+                self.lblPricelistInfo.setText("Готово: файл создан")
+            except Exception:
+                pass
+
+            try:
+                QMessageBox.information(self, "Готово", f"Файл создан:\n{output_path}")
+            except Exception:
+                pass
+
+            try:
+                if output_path:
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(output_path))
+            except Exception:
+                pass
+
+        except Exception:
+            pass
+
+    def _on_chain_pricetags_merge_failed(self, seq: int, error: str) -> None:
+        try:
+            self._chain_pricetags_merge_loading = False
+            self._chain_pricetags_merge_thread = None
+            self._chain_pricetags_merge_worker = None
+
+            try:
+                if hasattr(self, "btnMergeChainPricetags"):
+                    self.btnMergeChainPricetags.setEnabled(True)
+            except Exception:
+                pass
+
+            try:
+                self.lblPricelistInfo.setText(f"Ошибка: {error}")
+            except Exception:
+                pass
+
+            # показываем только если это актуальный запуск
+            if int(seq) == int(getattr(self, "_chain_pricetags_merge_seq", 0)):
+                try:
+                    QMessageBox.critical(self, "Ошибка", str(error))
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 
 def main():
