@@ -18,7 +18,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QBrush, QLinearGradient, QFont, QDesktopServices, QGuiApplication, QTextCharFormat
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QBoxLayout,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QBoxLayout,
     QLabel, QPushButton, QFileDialog, QTextEdit, QComboBox, QLineEdit,
     QGroupBox, QCheckBox, QSpinBox, QRadioButton, QButtonGroup, QMessageBox, QFrame, QSizePolicy, QScrollArea,
     QListWidget, QListWidgetItem, QInputDialog, QDialog, QDialogButtonBox, QCalendarWidget,
@@ -1247,49 +1247,98 @@ class MainWindow(QMainWindow):
         self.btnCashTemplate.clicked.connect(self.open_cash_template)
         StyleManager.style_action_button(self.btnCashTemplate)
 
-        # Кнопки "Документы": 2 колонки, одинаковый размер
+        # Кнопки "Документы": 3 категории = 3 колонки (1я/2я/3я), внутри — кнопки 2×N одинакового размера
         try:
-            docs_grid_box = QWidget()
-            docs_grid = QGridLayout(docs_grid_box)
-            LayoutStyles.apply_margins(docs_grid, LayoutStyles.NO_MARGINS)
-            docs_grid.setHorizontalSpacing(AppStyles.CONTENT_SPACING)
-            docs_grid.setVerticalSpacing(AppStyles.CONTENT_SPACING)
-
             # Приведём подписи к коротким названиям (без кавычек/"Excel")
             try:
                 self.btnCashTemplate.setText("Наличка")
             except Exception:
                 pass
 
-            doc_buttons: List[QPushButton] = [
-                self.btnVacationStatement,
-                self.btnMedicalBooks,
-                self.btnBirthdayFile,
-                self.btnDirection,
-                self.btnLockerDoc,
-                self.btnHygieneJournal,
-                self.btnFridgeTemp,
-                self.btnFreezerTemp,
-                self.btnFryerJournal,
-                self.btnBreakfasts,
-                self.btnDistribution,
-                self.btnPieNames,
-                self.btnBakeryPricelist,
-                self.btnCashTemplate,
-                self.btnBuffetSheet,
-                self.btnBakerSheet,
-            ]
-
-            btn_w = 360
             btn_h = 40
-            for i, b in enumerate(doc_buttons):
+
+            def _apply_btn_size(btns: List[QPushButton]) -> None:
+                for b in btns:
+                    try:
+                        b.setFixedHeight(btn_h)
+                        b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                    except Exception:
+                        pass
+
+            def _make_category(title: str, btns: List[QPushButton]) -> QGroupBox:
+                # Одна категория = один столбец (вертикально), кнопки внутри — по алфавиту
+                def _btn_key(b: QPushButton) -> str:
+                    try:
+                        t = str(b.text() or "")
+                    except Exception:
+                        t = ""
+                    return " ".join(t.lower().replace("ё", "е").split())
+
+                btns_sorted = sorted(list(btns or []), key=_btn_key)
+
+                _apply_btn_size(btns_sorted)
+                box = QGroupBox(title)
+                v = QVBoxLayout(box)
+                v.setSpacing(AppStyles.CONTENT_SPACING)
                 try:
-                    b.setFixedSize(btn_w, btn_h)
+                    LayoutStyles.apply_margins(v, LayoutStyles.NO_MARGINS)
                 except Exception:
                     pass
-                docs_grid.addWidget(b, i // 2, i % 2)
+                for b in btns_sorted:
+                    v.addWidget(b)
+                v.addStretch(1)
+                return box
 
-            docs_layout.addWidget(docs_grid_box)
+            # Категории документов
+            cat_people = _make_category(
+                "Кадры",
+                [
+                    self.btnVacationStatement,
+                    self.btnMedicalBooks,
+                    self.btnBirthdayFile,
+                    self.btnDirection,
+                    self.btnLockerDoc,
+                ],
+            )
+            cat_journals = _make_category(
+                "Журналы",
+                [
+                    self.btnHygieneJournal,
+                    self.btnFryerJournal,
+                    self.btnFridgeTemp,
+                    self.btnFreezerTemp,
+                ],
+            )
+            cat_templates = _make_category(
+                "Шаблоны",
+                [
+                    self.btnBreakfasts,
+                    self.btnDistribution,
+                    self.btnPieNames,
+                    self.btnBakeryPricelist,
+                    self.btnCashTemplate,
+                    self.btnBuffetSheet,
+                    self.btnBakerSheet,
+                ],
+            )
+
+            cats_row = QWidget()
+            cats_grid = QGridLayout(cats_row)
+            try:
+                LayoutStyles.apply_margins(cats_grid, LayoutStyles.NO_MARGINS)
+            except Exception:
+                pass
+            cats_grid.setHorizontalSpacing(AppStyles.CONTENT_SPACING)
+            cats_grid.setVerticalSpacing(AppStyles.CONTENT_SPACING)
+
+            cats_grid.addWidget(cat_people, 0, 0)
+            cats_grid.addWidget(cat_journals, 0, 1)
+            cats_grid.addWidget(cat_templates, 0, 2)
+            cats_grid.setColumnStretch(0, 1)
+            cats_grid.setColumnStretch(1, 1)
+            cats_grid.setColumnStretch(2, 1)
+
+            docs_layout.addWidget(cats_row)
         except Exception:
             # fallback: если что-то пошло не так — оставим вертикально
             try:
@@ -2407,7 +2456,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
 
     def open_cash_template(self) -> None:
-        """Открывает шаблон "Наличка.xlsx" из templates, подставляя текущий месяц и год в A1."""
+        """Открывает шаблон "Наличка.xlsx" из templates, подставляя текущий месяц и год в A1.
+
+        Не создаём копию: меняем сам шаблон и открываем его.
+        Если шаблон недоступен для записи — открываем временную копию.
+        """
         try:
             template_path = find_template("Наличка.xlsx")
             if not template_path:
@@ -2418,8 +2471,6 @@ class MainWindow(QMainWindow):
                 )
                 return
 
-            # Готовим копию на рабочий стол, чтобы не портить оригинальный шаблон
-            desktop = Path.home() / "Desktop"
             now = datetime.now()
 
             month_names = {
@@ -2439,15 +2490,7 @@ class MainWindow(QMainWindow):
             month_label = month_names.get(int(now.month), str(now.month))
             a1_value = f"{month_label} {now.year}"
 
-            suggested_name = f"Наличка_{now.month:02d}.{now.year}.xlsx"
-            out_path = desktop / suggested_name
-            if out_path.exists():
-                # не перезаписываем — добавим суффикс
-                for i in range(2, 100):
-                    candidate = desktop / f"Наличка_{now.month:02d}.{now.year}_{i}.xlsx"
-                    if not candidate.exists():
-                        out_path = candidate
-                        break
+            out_path = Path(template_path)
 
             try:
                 from openpyxl import load_workbook
@@ -2460,7 +2503,7 @@ class MainWindow(QMainWindow):
             try:
                 ws["A1"].value = a1_value
             except Exception:
-                # если лист защищён/ошибка записи — всё равно попробуем открыть исходник
+                # если лист защищён/ошибка записи
                 pass
 
             # Подставим даты на текущий месяц/год и спрячем лишние дни.
@@ -2489,8 +2532,17 @@ class MainWindow(QMainWindow):
             try:
                 wb.save(str(out_path))
             except Exception as e:
-                QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить копию 'Наличка': {e}")
-                return
+                # Частый случай: шаблон лежит в месте без прав на запись или уже открыт в Excel.
+                # Тогда сохраняем во временную копию и открываем её.
+                try:
+                    tmp_dir = Path(os.getenv("TEMP") or os.getenv("TMP") or str(Path.home()))
+                    tmp_name = f"Наличка_{now.month:02d}.{now.year}_временная.xlsx"
+                    tmp_path = tmp_dir / tmp_name
+                    wb.save(str(tmp_path))
+                    out_path = tmp_path
+                except Exception:
+                    QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить файл 'Наличка': {e}")
+                    return
 
             ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_path)))
             if not ok:
