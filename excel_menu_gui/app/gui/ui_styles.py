@@ -34,11 +34,18 @@ class AppStyles:
     COMPACT_SPACING = 4
     
     # === FONT SETTINGS ===
+    DEFAULT_FONT_FAMILY = "Segoe UI"
     DEFAULT_FONT_SIZE = 14
     CAPTION_FONT_WEIGHT = True  # Bold
     BUTTON_FONT_SIZE = 14
     # Чуть более жирный шрифт для лучшей читаемости кнопок
     BUTTON_FONT_WEIGHT = 700
+
+    # === CONTROL SIZES ===
+    # Единая высота для кнопок/инпутов, чтобы интерфейс выглядел гармонично.
+    # (чем меньше — тем компактнее интерфейс)
+    CONTROL_HEIGHT = 20
+    BUTTON_HEIGHT = CONTROL_HEIGHT
 
     # === BORDER RADIUS ===
     DEFAULT_BORDER_RADIUS = 8
@@ -56,8 +63,8 @@ class AppStyles:
     # «сминают» содержимое групп. Поэтому делаем чуть больше.
     FILE_GROUP_MIN_HEIGHT = 70
     EXCEL_GROUP_MIN_HEIGHT = 140
-    PARAMS_GROUP_MAX_HEIGHT = 70
-    SPINBOX_MIN_HEIGHT = 24
+    PARAMS_GROUP_MAX_HEIGHT = 90
+    SPINBOX_MIN_HEIGHT = CONTROL_HEIGHT
     
     # === ICON GRADIENT COLORS ===
     ICON_GRADIENT_START = "#FF7E5F"
@@ -237,15 +244,26 @@ class StyleSheets:
             str: CSS-код основных стилей приложения
         """
         return f"""
+            /* Global typography + control sizing */
+            QWidget {{
+                font-family: "{AppStyles.DEFAULT_FONT_FAMILY}";
+                font-size: {AppStyles.DEFAULT_FONT_SIZE}px;
+            }}
+            QPushButton {{
+                min-height: {AppStyles.BUTTON_HEIGHT}px;
+                padding: {ButtonStyles.DEFAULT_PADDING};
+                font-size: {AppStyles.BUTTON_FONT_SIZE}px;
+                font-weight: {AppStyles.BUTTON_FONT_WEIGHT};
+            }}
+            QLineEdit, QComboBox, QSpinBox {{
+                min-height: {AppStyles.CONTROL_HEIGHT}px;
+                font-size: {AppStyles.DEFAULT_FONT_SIZE}px;
+            }}
+
             #topBar {{
                 border: 1px solid palette(Mid);
                 border-radius: {AppStyles.DEFAULT_BORDER_RADIUS}px;
                 background: palette(Base);
-            }}
-            #topBar QPushButton {{
-                padding: {ButtonStyles.DEFAULT_PADDING};
-                font-size: {AppStyles.BUTTON_FONT_SIZE}px;
-                font-weight: {AppStyles.BUTTON_FONT_WEIGHT};
             }}
             #topBar QComboBox {{
                 padding: {ButtonStyles.COMPACT_PADDING};
@@ -257,9 +275,7 @@ class StyleSheets:
             }}
             /* Action panel buttons */
             #actionsPanel QPushButton {{
-                padding: {ButtonStyles.DEFAULT_PADDING};
-                font-size: {AppStyles.BUTTON_FONT_SIZE}px;
-                font-weight: {AppStyles.BUTTON_FONT_WEIGHT};
+                /* use global QPushButton settings */
             }}
             /* Parameter group styling */
             QGroupBox#paramsBox {{

@@ -1255,7 +1255,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-            btn_h = 40
+            btn_h = int(getattr(AppStyles, "BUTTON_HEIGHT", 40))
 
             def _apply_btn_size(btns: List[QPushButton]) -> None:
                 for b in btns:
@@ -5071,6 +5071,16 @@ def main():
         return
 
     app = QApplication(sys.argv)
+
+    # Единый шрифт во всём приложении
+    try:
+        font = QFont()
+        font.setFamily(str(getattr(AppStyles, "DEFAULT_FONT_FAMILY", "Segoe UI")))
+        font.setPointSize(int(getattr(AppStyles, "DEFAULT_FONT_SIZE", 14)))
+        app.setFont(font)
+    except Exception:
+        pass
+
     w = MainWindow()
     w.show()
     sys.exit(app.exec())

@@ -5,7 +5,7 @@ import winreg
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QPalette, QColor
 from PySide6.QtWidgets import QApplication
-from app.gui.ui_styles import ThemeAwareStyles
+from app.gui.ui_styles import ThemeAwareStyles, StyleSheets
 
 
 class ThemeMode(enum.Enum):
@@ -119,9 +119,12 @@ def apply_theme(app: QApplication, mode: ThemeMode) -> None:
     # Очищаем и заново устанавливаем stylesheet чтобы избежать смешения
     app.setStyleSheet("")
 
-    # Apply theme-aware styling using centralized styles
+    # Apply styling using centralized styles:
+    # 1) base stylesheet (единый шрифт/размеры контролов)
+    # 2) theme overrides (границы/календарь и т.п.)
+    base_stylesheet = StyleSheets.get_main_stylesheet()
     theme_stylesheet = ThemeAwareStyles.get_theme_stylesheet(dark)
-    app.setStyleSheet(theme_stylesheet)
+    app.setStyleSheet(base_stylesheet + "\n" + theme_stylesheet)
 
 
 def start_system_theme_watcher(on_change: Callable[[bool], None], interval_ms: int = 1500) -> QTimer:
