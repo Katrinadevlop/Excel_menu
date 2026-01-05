@@ -133,6 +133,20 @@ def find_template(filename: str) -> Optional[str]:
     return None
 
 
+def find_template_path(rel_path: str) -> Optional[str]:
+    """Ищет файл ИЛИ папку внутри templates (поддерживает PyInstaller _MEIPASS)."""
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+    candidates = [
+        base / "excel_menu_gui" / "templates" / rel_path,
+        base / "templates" / rel_path,
+        Path(__file__).parent / "templates" / rel_path,
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    return None
+
+
 def _open_schedule_task_name() -> str:
     """Имя задачи Windows Task Scheduler для запланированного открытия блюд.
 
@@ -1167,28 +1181,66 @@ class MainWindow(QMainWindow):
         self.btnFryerJournal.clicked.connect(self.open_fryer_oil_journal)
         StyleManager.style_action_button(self.btnFryerJournal)
 
+        # Новые документы/папки из templates
+        self.btnBreakfasts = QPushButton("Завтраки")
+        self.btnBreakfasts.clicked.connect(self.open_breakfasts_folder)
+        StyleManager.style_action_button(self.btnBreakfasts)
+
+        self.btnDistribution = QPushButton("Раздача")
+        self.btnDistribution.clicked.connect(self.open_distribution_sheet)
+        StyleManager.style_action_button(self.btnDistribution)
+
+        self.btnPieNames = QPushButton("Название пирогов")
+        self.btnPieNames.clicked.connect(self.open_pie_names)
+        StyleManager.style_action_button(self.btnPieNames)
+
+        self.btnBakeryPricelist = QPushButton("Прейскурант выпечка")
+        self.btnBakeryPricelist.clicked.connect(self.open_bakery_pricelist)
+        StyleManager.style_action_button(self.btnBakeryPricelist)
+
+        self.btnCashTemplate = QPushButton("Шаблон наличка")
+        self.btnCashTemplate.clicked.connect(self.open_cash_template)
+        StyleManager.style_action_button(self.btnCashTemplate)
+
+        # Кнопки "Документы" не должны растягиваться на всю ширину.
+        def _docs_add_button(btn: QPushButton) -> None:
+            row = QWidget()
+            lay = QHBoxLayout(row)
+            LayoutStyles.apply_margins(lay, LayoutStyles.NO_MARGINS)
+            try:
+                lay.addWidget(btn, 0, Qt.AlignLeft)
+            except Exception:
+                lay.addWidget(btn)
+            lay.addStretch(1)
+            docs_layout.addWidget(row)
+
         # Категории
         docs_layout.addWidget(label_caption("Персонал / Кадры"))
-        docs_layout.addWidget(self.btnVacationStatement)
-        docs_layout.addWidget(self.btnMedicalBooks)
-        docs_layout.addWidget(self.btnBirthdayFile)
-        docs_layout.addWidget(self.btnDirection)
+        _docs_add_button(self.btnVacationStatement)
+        _docs_add_button(self.btnMedicalBooks)
+        _docs_add_button(self.btnBirthdayFile)
+        _docs_add_button(self.btnDirection)
 
         docs_layout.addSpacing(AppStyles.CONTENT_SPACING)
         docs_layout.addWidget(label_caption("Санитария и контроль"))
-        docs_layout.addWidget(self.btnHygieneJournal)
-        docs_layout.addWidget(self.btnFridgeTemp)
-        docs_layout.addWidget(self.btnFreezerTemp)
-        docs_layout.addWidget(self.btnFryerJournal)
+        _docs_add_button(self.btnHygieneJournal)
+        _docs_add_button(self.btnFridgeTemp)
+        _docs_add_button(self.btnFreezerTemp)
+        _docs_add_button(self.btnFryerJournal)
 
         docs_layout.addSpacing(AppStyles.CONTENT_SPACING)
         docs_layout.addWidget(label_caption("Производство"))
-        docs_layout.addWidget(self.btnBuffetSheet)
-        docs_layout.addWidget(self.btnBakerSheet)
+        _docs_add_button(self.btnBreakfasts)
+        _docs_add_button(self.btnDistribution)
+        _docs_add_button(self.btnPieNames)
+        _docs_add_button(self.btnBakeryPricelist)
+        _docs_add_button(self.btnCashTemplate)
+        _docs_add_button(self.btnBuffetSheet)
+        _docs_add_button(self.btnBakerSheet)
 
         docs_layout.addSpacing(AppStyles.CONTENT_SPACING)
         docs_layout.addWidget(label_caption("Помещения"))
-        docs_layout.addWidget(self.btnLockerDoc)
+        _docs_add_button(self.btnLockerDoc)
 
         docs_layout.addStretch(1)
 
@@ -2184,6 +2236,167 @@ class MainWindow(QMainWindow):
                     self,
                     "Открытие",
                     f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_breakfasts_folder(self) -> None:
+        """Открывает папку templates/Завтраки."""
+        try:
+            folder_path = find_template_path("Завтраки")
+            if (not folder_path) or (not Path(folder_path).exists()) or (not Path(folder_path).is_dir()):
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Папка 'Завтраки' не найдена. Положите папку 'Завтраки' в templates.",
+                )
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось открыть папку:\n{folder_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_distribution_sheet(self) -> None:
+        """Открывает шаблон "Раздача.xlsx" из templates."""
+        try:
+            template_path = find_template("Раздача.xlsx")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Раздача.xlsx' не найден. Положите его в папку templates.",
+                )
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_pie_names(self) -> None:
+        """Открывает шаблон "Название пирогов.docx" из templates."""
+        try:
+            template_path = find_template("Название пирогов.docx")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Название пирогов.docx' не найден. Положите его в папку templates.",
+                )
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_bakery_pricelist(self) -> None:
+        """Открывает шаблон "Прейскурант выпечка.xlsx" из templates."""
+        try:
+            template_path = find_template("Прейскурант выпечка.xlsx")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Прейскурант выпечка.xlsx' не найден. Положите его в папку templates.",
+                )
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(template_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{template_path}",
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
+
+    def open_cash_template(self) -> None:
+        """Открывает шаблон "Наличка.xlsx" из templates, подставляя текущий месяц и год в A1."""
+        try:
+            template_path = find_template("Наличка.xlsx")
+            if not template_path:
+                QMessageBox.warning(
+                    self,
+                    "Шаблон",
+                    "Файл 'Наличка.xlsx' не найден. Положите его в папку templates.",
+                )
+                return
+
+            # Готовим копию на рабочий стол, чтобы не портить оригинальный шаблон
+            desktop = Path.home() / "Desktop"
+            now = datetime.now()
+
+            month_names = {
+                1: "Январь",
+                2: "Февраль",
+                3: "Март",
+                4: "Апрель",
+                5: "Май",
+                6: "Июнь",
+                7: "Июль",
+                8: "Август",
+                9: "Сентябрь",
+                10: "Октябрь",
+                11: "Ноябрь",
+                12: "Декабрь",
+            }
+            month_label = month_names.get(int(now.month), str(now.month))
+            a1_value = f"{month_label} {now.year}"
+
+            suggested_name = f"Наличка_{now.month:02d}.{now.year}.xlsx"
+            out_path = desktop / suggested_name
+            if out_path.exists():
+                # не перезаписываем — добавим суффикс
+                for i in range(2, 100):
+                    candidate = desktop / f"Наличка_{now.month:02d}.{now.year}_{i}.xlsx"
+                    if not candidate.exists():
+                        out_path = candidate
+                        break
+
+            try:
+                from openpyxl import load_workbook
+            except Exception:
+                QMessageBox.warning(self, "Ошибка", "Не найден модуль openpyxl. Невозможно изменить файл 'Наличка.xlsx'.")
+                return
+
+            wb = load_workbook(template_path)
+            ws = wb.active
+            try:
+                ws["A1"].value = a1_value
+            except Exception:
+                # если лист защищён/ошибка записи — всё равно попробуем открыть исходник
+                pass
+
+            try:
+                wb.save(str(out_path))
+            except Exception as e:
+                QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить копию 'Наличка': {e}")
+                return
+
+            ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_path)))
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Открытие",
+                    f"Не удалось автоматически открыть файл:\n{out_path}",
                 )
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Произошла ошибка: {str(e)}")
