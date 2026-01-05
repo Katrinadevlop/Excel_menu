@@ -8,6 +8,11 @@ The user workflow:
 - When multiple exports need to be combined, the desired output is one file with
   price tags stacked vertically and one blank row between tags.
 
+Requirement update (черные ценники):
+- The output must use the black iikoChain price tag style ("Черные ЦЕННИК.xls").
+- We keep one tag as a stored Excel template and only fill:
+  name+weight, price, and composition.
+
 Why Excel COM:
 - iikoChain exports are often .xls with many merged cells and formatting.
 - openpyxl cannot read .xls, and xlrd reads but cannot easily write formatting.
@@ -21,135 +26,236 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Tuple
+from typing import Any, List
 
 import os
 import shutil
+import sys
 import tempfile
 import uuid
 
 
-_MARKER_TEXT = "Цена за порц."  # marker that exists once per price tag
-_TAG_HEIGHT_ROWS = 8           # rows per tag block (start..start+7)
-_TAG_WIDTH_COLS = 5            # columns per tag block (start..start+4)
-_MARKER_OFFSET_ROW = 7         # marker row = start_row + 7
-_MARKER_OFFSET_COL = 2         # marker col = start_col + 2 (3rd column inside tag)
+_TEMPLATE_FILENAME = "black_pricetag_template.xls"
+
+# iikoChain "Большой ценник" layout (rows are 1-indexed for Excel COM)
+_HEADER_ROWS = 3
+_TAG_START_ROW = 4
+_TAG_HEIGHT_ROWS = 8  # rows per tag block (4..11)
+_SEPARATOR_ROWS = 1   # one separator row (12)
+_TAG_BLOCK_ROWS = _TAG_HEIGHT_ROWS + _SEPARATOR_ROWS  # 9
+_TAG_WIDTH_COLS = 5   # columns A..E
+
+# Within a tag block (relative to tag start row / col)
+_NAME_OFFSET_ROW = 1
+_NAME_OFFSET_COL = 1
+_COMPOSITION_OFFSET_ROW = 4
+_COMPOSITION_OFFSET_COL = 1
+_PRICE_OFFSET_ROW = 6
+_PRICE_OFFSET_COL = 3
+
+# Left tag is A..E (start_col=1). Sometimes iikoChain puts a second tag on the
+# same rows in G..K (start_col=7).
+_POSSIBLE_START_COLS = (1, 7)
 
 
 @dataclass(frozen=True)
-class TagRange:
-    start_row: int
-    start_col: int
-    end_row: int
-    end_col: int
+class TagData:
+    name: str
+    weight: str = ""
+    composition: str = ""
+    price: str = ""
 
 
-def merge_iikochain_big_pricetags(
-    input_paths: List[str],
-    output_path: str,
-    *,
-    marker_text: str = _MARKER_TEXT,
-) -> None:
-    """Merge iikoChain exports into a single Excel file.
+def _resolve_template_path() -> Path:
+    """Находит файл шаблона (поддерживает запуск из исходников и PyInstaller _MEIPASS)."""
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
+    candidates = [
+        # PyInstaller иногда кладёт данные в _MEIPASS/excel_menu_gui/templates
+        base / "excel_menu_gui" / "templates" / _TEMPLATE_FILENAME,
+        base / "templates" / _TEMPLATE_FILENAME,
+        # dev/run from repo
+        Path(__file__).resolve().parents[2] / "templates" / _TEMPLATE_FILENAME,
+        Path.cwd() / "templates" / _TEMPLATE_FILENAME,
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    raise FileNotFoundError(
+        f"Не найден шаблон черного ценника: {_TEMPLATE_FILENAME}. "
+        f"Пробовали: {', '.join(str(c) for c in candidates)}"
+    )
 
-    Args:
-        input_paths: List of source .xls/.xlsx files exported from iikoChain.
-        output_path: Destination .xls or .xlsx path.
-        marker_text: Text that marks a price tag block.
 
-    Notes:
-        - Requires Windows + installed Microsoft Excel.
-        - Saves to a temp file first (Excel COM may be unable to SaveAs directly
-          to some folders), then moves to the requested output path.
+def _to_text(v: Any) -> str:
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
+def _format_name(name: Any, weight: Any = "") -> str:
+    n = _to_text(name)
+    w = _to_text(weight)
+    if not n:
+        return ""
+    if w:
+        # avoid duplicating weight if it's already part of the name
+        if w.lower() not in n.lower():
+            return f"{n} {w}".strip()
+    return n
+
+
+def _format_price(price: Any) -> str:
+    """Formats price text for the template (usually like "90 р.")."""
+    s = _to_text(price)
+    if not s:
+        return ""
+
+    low = s.lower()
+    if ("₽" in s) or (" руб" in low) or ("руб." in low) or ("р." in low) or (" р" in low):
+        return s
+
+    # numeric string -> add "р."
+    try:
+        v = float(s.replace(",", "."))
+        if v.is_integer():
+            return f"{int(v)} р."
+        # keep without scientific notation
+        v_txt = ("%f" % v).rstrip("0").rstrip(".")
+        return f"{v_txt} р."
+    except Exception:
+        return s
+
+
+def _is_nonempty(v) -> bool:
+    if v is None:
+        return False
+    if isinstance(v, str):
+        return bool(v.strip())
+    return True
+
+
+def _extract_tags_from_sheet(ws) -> List[TagData]:
+    """Extract TagData from an iikoChain export sheet.
+
+    We don't rely on a marker text; instead we scan tag blocks starting at row 4
+    with step = 9 (8 rows tag + 1 separator).
     """
 
-    if not input_paths:
-        raise ValueError("Не выбраны входные файлы ценников.")
+    ur = ws.UsedRange
+    max_row = int(ur.Row) + int(ur.Rows.Count) - 1
+
+    tags: List[TagData] = []
+    empty_blocks = 0
+
+    row = _TAG_START_ROW
+    while row <= max_row:
+        found_in_row = 0
+
+        for start_col in _POSSIBLE_START_COLS:
+            name_cell = ws.Cells(row + _NAME_OFFSET_ROW, start_col + _NAME_OFFSET_COL)
+            name_v = None
+            try:
+                name_v = name_cell.Value
+            except Exception:
+                name_v = None
+            if not _is_nonempty(name_v):
+                continue
+
+            comp_v = None
+            price_v = None
+            try:
+                comp_v = ws.Cells(row + _COMPOSITION_OFFSET_ROW, start_col + _COMPOSITION_OFFSET_COL).Value
+            except Exception:
+                comp_v = None
+            try:
+                price_cell = ws.Cells(row + _PRICE_OFFSET_ROW, start_col + _PRICE_OFFSET_COL)
+                price_v = price_cell.Value
+            except Exception:
+                price_v = None
+
+            tags.append(
+                TagData(
+                    name=_to_text(name_v),
+                    weight="",
+                    composition=_to_text(comp_v),
+                    price=_to_text(price_v),
+                )
+            )
+            found_in_row += 1
+
+        if found_in_row == 0:
+            empty_blocks += 1
+            if empty_blocks >= 3:
+                break
+        else:
+            empty_blocks = 0
+
+        row += _TAG_BLOCK_ROWS
+
+    return tags
+
+
+def export_black_pricetags(
+    tags: List[TagData],
+    output_path: str,
+) -> None:
+    """Создаёт чёрные ценники по шаблону (Excel COM).
+
+    Заполняет:
+    - название (+вес, если передан отдельно)
+    - цену (если есть)
+    - состав/описание (если есть)
+
+    Args:
+        tags: Список тегов для заполнения.
+        output_path: Путь выходного файла (.xls или .xlsx).
+    """
+
+    items: List[TagData] = []
+    for t in (tags or []):
+        if not isinstance(t, TagData):
+            continue
+        nm = _to_text(t.name)
+        if not nm:
+            continue
+        items.append(
+            TagData(
+                name=nm,
+                weight=_to_text(t.weight),
+                composition=_to_text(t.composition),
+                price=_to_text(t.price),
+            )
+        )
+
+    if not items:
+        raise ValueError("Не выбраны блюда для ценников.")
+
+    template_path = _resolve_template_path()
 
     out_path = Path(output_path)
     if not out_path.suffix:
-        # default to .xls for best compatibility with iikoChain exports
         out_path = out_path.with_suffix(".xls")
 
     out_ext = out_path.suffix.lower()
     if out_ext not in (".xls", ".xlsx"):
         raise ValueError("Выберите выходной файл с расширением .xls или .xlsx")
 
-    # Excel file format constants
     file_format = 56 if out_ext == ".xls" else 51  # 56 = xlExcel8, 51 = xlOpenXMLWorkbook
 
-    # temp target path (same extension)
     tmp_name = f"excel_menu_gui_pricetags_{uuid.uuid4().hex}{out_ext}"
     tmp_path = Path(tempfile.gettempdir()) / tmp_name
 
-    # Import COM deps lazily to keep module importable on non-Windows.
     try:
         import win32com.client as win32  # type: ignore
     except Exception as e:
         raise RuntimeError(
-            "Для объединения ценников нужен установленный Microsoft Excel (Windows) и pywin32."
+            "Для выгрузки ценников нужен установленный Microsoft Excel (Windows) и pywin32."
         ) from e
-
-    # Helper: iterate marker cells via Find/FindNext (fast, avoids per-cell reads).
-    def _iter_marker_cells(ws) -> List[Tuple[int, int]]:
-        used = ws.UsedRange
-        # xlByRows=1, xlNext=1, xlPart=2, xlValues=-4163
-        first = used.Find(
-            What=marker_text,
-            LookIn=-4163,
-            LookAt=2,
-            SearchOrder=1,
-            SearchDirection=1,
-            MatchCase=False,
-        )
-        if not first:
-            return []
-
-        hits: List[Tuple[int, int]] = []
-        first_addr = first.Address
-        cur = first
-        while True:
-            try:
-                v = cur.Value
-            except Exception:
-                v = None
-            if isinstance(v, str) and v.strip() == marker_text:
-                hits.append((int(cur.Row), int(cur.Column)))
-
-            cur = used.FindNext(cur)
-            if (not cur) or (cur.Address == first_addr):
-                break
-
-        return hits
-
-    def _sheet_max_bounds(ws) -> Tuple[int, int]:
-        ur = ws.UsedRange
-        max_row = int(ur.Row) + int(ur.Rows.Count) - 1
-        max_col = int(ur.Column) + int(ur.Columns.Count) - 1
-        return max_row, max_col
-
-    def _build_tag_ranges(ws) -> List[TagRange]:
-        max_row, max_col = _sheet_max_bounds(ws)
-        markers = _iter_marker_cells(ws)
-        ranges: set[TagRange] = set()
-
-        for (mr, mc) in markers:
-            start_row = mr - _MARKER_OFFSET_ROW
-            start_col = mc - _MARKER_OFFSET_COL
-            if start_row < 1 or start_col < 1:
-                continue
-            end_row = start_row + (_TAG_HEIGHT_ROWS - 1)
-            end_col = start_col + (_TAG_WIDTH_COLS - 1)
-            if end_row > max_row or end_col > max_col:
-                continue
-            ranges.add(TagRange(start_row=start_row, start_col=start_col, end_row=end_row, end_col=end_col))
-
-        out = list(ranges)
-        out.sort(key=lambda t: (t.start_row, t.start_col))
-        return out
 
     xl = None
     wb_out = None
+    wb_tpl = None
+
     try:
         xl = win32.Dispatch("Excel.Application")
         xl.Visible = False
@@ -159,10 +265,12 @@ def merge_iikochain_big_pricetags(
         except Exception:
             pass
         try:
-            # xlCalculationManual = -4135
-            xl.Calculation = -4135
+            xl.Calculation = -4135  # xlCalculationManual
         except Exception:
             pass
+
+        wb_tpl = xl.Workbooks.Open(str(template_path), ReadOnly=True)
+        ws_tpl = wb_tpl.Worksheets(1)
 
         wb_out = xl.Workbooks.Add()
         ws_out = wb_out.Worksheets(1)
@@ -171,104 +279,76 @@ def merge_iikochain_big_pricetags(
         except Exception:
             pass
 
-        # delete any extra default sheets
+        # Важно для .xls: копируем палитру цветов, иначе черный/белый может "переехать".
+        try:
+            wb_out.Colors = wb_tpl.Colors
+        except Exception:
+            pass
+
+        # delete extra default sheets
         try:
             while wb_out.Worksheets.Count > 1:
                 wb_out.Worksheets(wb_out.Worksheets.Count).Delete()
         except Exception:
             pass
 
-        header_copied = False
-        dest_row = 4
+        # header + base formatting
+        ws_tpl.Range(ws_tpl.Cells(1, 1), ws_tpl.Cells(_HEADER_ROWS, _TAG_WIDTH_COLS)).Copy(ws_out.Cells(1, 1))
 
-        for idx, in_path in enumerate(input_paths):
-            src_path = str(Path(in_path))
-            if not Path(src_path).exists():
-                raise FileNotFoundError(f"Файл не найден: {src_path}")
-
-            wb_src = xl.Workbooks.Open(src_path, ReadOnly=True)
+        for c in range(1, _TAG_WIDTH_COLS + 1):
             try:
-                ws_src = wb_src.Worksheets(1)
+                ws_out.Columns(c).ColumnWidth = ws_tpl.Columns(c).ColumnWidth
+            except Exception:
+                pass
 
-                tag_ranges = _build_tag_ranges(ws_src)
-                if not tag_ranges:
-                    # no markers; skip
-                    continue
+        for r in range(1, _HEADER_ROWS + 1):
+            try:
+                ws_out.Rows(r).RowHeight = ws_tpl.Rows(r).RowHeight
+            except Exception:
+                pass
 
-                # Copy header + column widths from the first usable file.
-                # iikoChain template usually has first tag starting at row 4.
-                if not header_copied:
-                    # Copy rows 1..3 from the source (A..E)
-                    ws_src.Range(ws_src.Cells(1, 1), ws_src.Cells(3, 5)).Copy(ws_out.Cells(1, 1))
+        try:
+            ps_src = ws_tpl.PageSetup
+            ps_out = ws_out.PageSetup
+            ps_out.Orientation = ps_src.Orientation
+            ps_out.PaperSize = ps_src.PaperSize
+            ps_out.Zoom = ps_src.Zoom
+            ps_out.FitToPagesWide = ps_src.FitToPagesWide
+            ps_out.FitToPagesTall = ps_src.FitToPagesTall
+        except Exception:
+            pass
 
-                    # Column widths A..E
-                    for c in range(1, 6):
-                        try:
-                            ws_out.Columns(c).ColumnWidth = ws_src.Columns(c).ColumnWidth
-                        except Exception:
-                            pass
+        dest_row = _TAG_START_ROW
+        for t in items:
+            # copy tag block 4..11 and separator row 12 from template
+            ws_tpl.Range(
+                ws_tpl.Cells(_TAG_START_ROW, 1),
+                ws_tpl.Cells(_TAG_START_ROW + _TAG_HEIGHT_ROWS - 1, _TAG_WIDTH_COLS),
+            ).Copy(ws_out.Cells(dest_row, 1))
 
-                    # Row heights 1..3
-                    for r in range(1, 4):
-                        try:
-                            ws_out.Rows(r).RowHeight = ws_src.Rows(r).RowHeight
-                        except Exception:
-                            pass
+            ws_tpl.Range(
+                ws_tpl.Cells(_TAG_START_ROW + _TAG_HEIGHT_ROWS, 1),
+                ws_tpl.Cells(_TAG_START_ROW + _TAG_HEIGHT_ROWS, _TAG_WIDTH_COLS),
+            ).Copy(ws_out.Cells(dest_row + _TAG_HEIGHT_ROWS, 1))
 
-                    # Try to copy page setup (optional, for printing).
-                    try:
-                        ps_src = ws_src.PageSetup
-                        ps_out = ws_out.PageSetup
-                        ps_out.Orientation = ps_src.Orientation
-                        ps_out.PaperSize = ps_src.PaperSize
-                        ps_out.Zoom = ps_src.Zoom
-                        ps_out.FitToPagesWide = ps_src.FitToPagesWide
-                        ps_out.FitToPagesTall = ps_src.FitToPagesTall
-                    except Exception:
-                        pass
-
-                    header_copied = True
-                    dest_row = 4
-
-                # Copy each tag into A..E (always). If a tag is in the right column (G..K),
-                # we still place it to the left for consistent printing.
-                for tr in tag_ranges:
-                    src_rng = ws_src.Range(ws_src.Cells(tr.start_row, tr.start_col), ws_src.Cells(tr.end_row, tr.end_col))
-                    src_rng.Copy(ws_out.Cells(dest_row, 1))
-
-                    # Copy row heights for the tag rows.
-                    for off in range(_TAG_HEIGHT_ROWS):
-                        try:
-                            ws_out.Rows(dest_row + off).RowHeight = ws_src.Rows(tr.start_row + off).RowHeight
-                        except Exception:
-                            pass
-
-                    # One blank separator row between tags.
-                    sep_src_row = tr.end_row + 1
-                    sep_dest_row = dest_row + _TAG_HEIGHT_ROWS
-                    try:
-                        sep_rng = ws_src.Range(ws_src.Cells(sep_src_row, tr.start_col), ws_src.Cells(sep_src_row, tr.end_col))
-                        sep_rng.Copy(ws_out.Cells(sep_dest_row, 1))
-                        try:
-                            ws_out.Rows(sep_dest_row).RowHeight = ws_src.Rows(sep_src_row).RowHeight
-                        except Exception:
-                            pass
-                    except Exception:
-                        # If source has no separator row, just leave it empty.
-                        pass
-
-                    dest_row = sep_dest_row + 1
-
-            finally:
+            # row heights for tag+separator
+            for off in range(_TAG_BLOCK_ROWS):
                 try:
-                    wb_src.Close(False)
+                    ws_out.Rows(dest_row + off).RowHeight = ws_tpl.Rows(_TAG_START_ROW + off).RowHeight
                 except Exception:
                     pass
 
-        if not header_copied:
-            raise ValueError("Не удалось найти ни одного ценника (маркер 'Цена за порц.').")
+            # заполняем поля (и очищаем примеры из шаблона)
+            ws_out.Cells(dest_row + _NAME_OFFSET_ROW, 2).Value = _format_name(t.name, t.weight)
 
-        # Save to temp first; some folders (e.g., Desktop) can be blocked for Excel COM SaveAs.
+            comp = _to_text(t.composition)
+            ws_out.Cells(dest_row + _COMPOSITION_OFFSET_ROW, 2).Value = comp if comp else ""
+
+            pr = _format_price(t.price)
+            ws_out.Cells(dest_row + _PRICE_OFFSET_ROW, 4).Value = pr if pr else ""
+
+            dest_row += _TAG_BLOCK_ROWS
+
         try:
             wb_out.SaveAs(str(tmp_path), FileFormat=file_format)
         finally:
@@ -279,24 +359,50 @@ def merge_iikochain_big_pricetags(
 
     finally:
         try:
+            if wb_tpl is not None:
+                wb_tpl.Close(False)
+        except Exception:
+            pass
+        try:
             if xl is not None:
                 xl.Quit()
         except Exception:
             pass
 
-    # Move to requested destination (overwrite if exists)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         if out_path.exists():
-            try:
-                out_path.unlink()
-            except Exception:
-                # If file is open, user must close it.
-                raise
+            out_path.unlink()
         os.replace(str(tmp_path), str(out_path))
     except Exception:
-        # fallback: move (may work across volumes)
         try:
             shutil.move(str(tmp_path), str(out_path))
         except Exception:
             raise
+
+
+def export_black_pricetags_from_dish_names(
+    dish_names: List[str],
+    output_path: str,
+) -> None:
+    """Совместимость: список названий -> чёрные ценники."""
+    tags: List[TagData] = []
+    for nm in (dish_names or []):
+        s = _to_text(nm)
+        if not s:
+            continue
+        tags.append(TagData(name=s))
+    export_black_pricetags(tags, output_path)
+
+
+# Backward-compatible name (older UI used merge_iikochain_big_pricetags)
+def merge_iikochain_big_pricetags(
+    input_paths: List[str],
+    output_path: str,
+) -> None:
+    """Deprecated: kept for compatibility.
+
+    Previously merged iikoChain exports by markers. Now we generate from a list of
+    dish names passed in input_paths.
+    """
+    export_black_pricetags_from_dish_names(input_paths, output_path)

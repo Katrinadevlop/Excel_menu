@@ -12,6 +12,98 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 from urllib.parse import urlsplit, parse_qsl
 
+# Crash diagnostics (fatal + Python exceptions + Qt messages)
+# Логи пишутся в файл %TEMP%/excel_menu_gui_crash.log И одновременно дублируются в консоль (stdout/stderr).
+_FAULT_LOG_FH = None
+_FAULT_LOG_PATH: Optional[Path] = None
+# Глобальный реестр активных QThread, чтобы гасить их на выходе даже если closeEvent не сработал
+_ACTIVE_THREADS: "set[QThread]" = set()
+try:
+    import faulthandler
+    import tempfile
+    import traceback
+    import atexit
+    from PySide6.QtCore import qInstallMessageHandler, QtMsgType, QMessageLogContext
+
+    _FAULT_LOG_PATH = Path(tempfile.gettempdir()) / "excel_menu_gui_crash.log"
+    _FAULT_LOG_FH = open(_FAULT_LOG_PATH, "a", encoding="utf-8", errors="replace")
+    faulthandler.enable(file=_FAULT_LOG_FH, all_threads=True)
+
+    def _flush_fault_log():
+        try:
+            if _FAULT_LOG_FH:
+                _FAULT_LOG_FH.flush()
+        except Exception:
+            pass
+
+    atexit.register(_flush_fault_log)
+
+    def _stop_active_threads_on_exit():
+        try:
+            for th in list(_ACTIVE_THREADS):
+                if th is None:
+                    continue
+                try:
+                    if th.isRunning():
+                        th.requestInterruption()
+                        th.quit()
+                        th.wait(15_000)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    atexit.register(_stop_active_threads_on_exit)
+
+    def _write_exc(prefix: str, exc_type, exc_value, exc_tb):
+        try:
+            ts = datetime.now().isoformat(timespec="seconds")
+            line = f"\n[{ts}] {prefix}: {exc_type.__name__}: {exc_value}\n"
+            _FAULT_LOG_FH.write(line)
+            traceback.print_exception(exc_type, exc_value, exc_tb, file=_FAULT_LOG_FH)
+            _FAULT_LOG_FH.flush()
+
+            # дублируем в консоль
+            try:
+                sys.stderr.write(line)
+                traceback.print_exception(exc_type, exc_value, exc_tb, file=sys.stderr)
+                sys.stderr.flush()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _excepthook(exc_type, exc_value, exc_tb):
+        _write_exc("Uncaught", exc_type, exc_value, exc_tb)
+        try:
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+        except Exception:
+            pass
+
+    sys.excepthook = _excepthook
+
+    def _qt_message_handler(mode: QtMsgType, ctx: QMessageLogContext, msg: str):
+        try:
+            ts = datetime.now().isoformat(timespec="seconds")
+            line = f"\n[{ts}] Qt[{int(mode)}] {msg}\n"
+            _FAULT_LOG_FH.write(line)
+            _FAULT_LOG_FH.flush()
+
+            try:
+                sys.stderr.write(line)
+                sys.stderr.flush()
+            except Exception:
+                pass
+        except Exception:
+            pass
+    try:
+        qInstallMessageHandler(_qt_message_handler)
+    except Exception:
+        pass
+
+except Exception:
+    _FAULT_LOG_FH = None
+    _FAULT_LOG_PATH = None
+
 from PySide6.QtCore import (
     Qt, QMimeData, QSize, QUrl, QSettings, QEvent, QPoint, QTimer, QDate,
     QObject, Signal, QThread, QCoreApplication, QLockFile,
@@ -34,7 +126,7 @@ from app.gui.theme import ThemeMode, apply_theme, start_system_theme_watcher
 from app.reports.presentation_handler import create_presentation_with_excel_data
 from app.reports.brokerage_journal import create_brokerage_journal_from_menu
 from app.reports.pricelist_excel import create_pricelist_xlsx
-from app.reports.iikochain_pricetag_merge import merge_iikochain_big_pricetags
+from app.reports.iikochain_pricetag_merge import export_black_pricetags, TagData
 from app.services.dish_extractor import extract_all_dishes_with_details, DishItem
 from app.integrations.iiko_rms_client import IikoRmsClient, IikoApiError
 from app.integrations.iiko_cloud_client import IikoCloudClient as IikoTransportClient
@@ -423,8 +515,12 @@ class IikoProductsLoadWorker(QObject):
         try:
             res = self._do_fetch_and_index()
             self.finished.emit(self.seq, res)
-        except Exception as e:
-            self.failed.emit(self.seq, str(e))
+        except BaseException as e:
+            # BaseException: чтобы не уронить процесс из фонового потока (SystemExit/KeyboardInterrupt/etc.)
+            try:
+                self.failed.emit(self.seq, str(e))
+            except Exception:
+                pass
 
     def _do_fetch_and_index(self) -> dict:
         mode = str(self.snapshot.get("mode") or "").strip().lower()
@@ -526,10 +622,14 @@ class IikoProductsLoadWorker(QObject):
             if k and (k not in open_exact):
                 open_exact[k] = p
 
+            w0 = getattr(p, "weight", "")
+            pr0 = getattr(p, "price", "")
+            desc0 = getattr(p, "description", "")
             d = DishItem(
                 name=name,
-                weight=(getattr(p, "weight", "") or ""),
-                price=(getattr(p, "price", "") or ""),
+                weight=("" if w0 is None else w0),
+                price=("" if pr0 is None else pr0),
+                description=("" if desc0 is None else desc0),
             )
             pricelist_dishes.append(d)
             pricelist_norm.append((norm_sub(d.name), d))
@@ -550,18 +650,18 @@ class IikoProductsLoadWorker(QObject):
 
 
 class ChainPriceTagsMergeWorker(QObject):
-    """Объединяет iikoChain-выгрузки ценников ("Большой ценник") в один файл.
+    """Выгружает чёрные ценники по шаблону (Excel COM).
 
-    Делает это через Excel COM, чтобы сохранить форматирование и merged cells.
+    Заполняем название (+вес), цену и описание (если есть).
     """
 
     finished = Signal(int, str)  # seq, output_path
     failed = Signal(int, str)    # seq, error
 
-    def __init__(self, seq: int, input_paths: List[str], output_path: str):
+    def __init__(self, seq: int, tags: List[TagData], output_path: str):
         super().__init__()
         self.seq = int(seq)
-        self.input_paths = list(input_paths or [])
+        self.tags = list(tags or [])
         self.output_path = str(output_path or "")
 
     def run(self) -> None:
@@ -574,7 +674,7 @@ class ChainPriceTagsMergeWorker(QObject):
             except Exception:
                 pythoncom = None
 
-            merge_iikochain_big_pricetags(self.input_paths, self.output_path)
+            export_black_pricetags(self.tags, self.output_path)
             self.finished.emit(self.seq, self.output_path)
         except Exception as e:
             self.failed.emit(self.seq, str(e))
@@ -1045,14 +1145,28 @@ class MainWindow(QMainWindow):
 
         # Подсказки/список блюд (выпадающий список поверх UI — не в layout)
         self.lstDishSuggestions = QListWidget(self)
-        self.lstDishSuggestions.setWindowFlags(Qt.Popup)
+        # Важно: Qt.Popup перехватывает клавиатуру (backspace/ввод), поэтому используем Tool-окно.
+        # Закрытие по клику вне списка делаем через eventFilter.
+        try:
+            self.lstDishSuggestions.setWindowFlags(
+                Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus
+            )
+        except Exception:
+            self.lstDishSuggestions.setWindowFlags(Qt.Tool)
+        try:
+            self.lstDishSuggestions.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        except Exception:
+            pass
         self.lstDishSuggestions.setFocusPolicy(Qt.NoFocus)
         self.lstDishSuggestions.hide()
         self.lstDishSuggestions.itemClicked.connect(self._on_pricelist_suggestion_clicked)
         self.lstDishSuggestions.itemDoubleClicked.connect(self._on_pricelist_suggestion_clicked)
 
+        self._suppress_pricelist_selected_item_changed = False
+
         self.lstSelectedDishes = QListWidget()
         self.lstSelectedDishes.setMinimumHeight(160)
+        self.lstSelectedDishes.itemChanged.connect(self._on_pricelist_selected_item_changed)
 
         self.btnClearSelectedDishes = QPushButton("Очистить выбор")
         self.btnClearSelectedDishes.clicked.connect(self._clear_pricelist_selection)
@@ -1138,7 +1252,16 @@ class MainWindow(QMainWindow):
 
         # Подсказки (выпадающий список поверх UI — не в layout)
         self.lstTomorrowDishes = QListWidget(self)
-        self.lstTomorrowDishes.setWindowFlags(Qt.Popup)
+        try:
+            self.lstTomorrowDishes.setWindowFlags(
+                Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus
+            )
+        except Exception:
+            self.lstTomorrowDishes.setWindowFlags(Qt.Tool)
+        try:
+            self.lstTomorrowDishes.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        except Exception:
+            pass
         self.lstTomorrowDishes.setFocusPolicy(Qt.NoFocus)
         self.lstTomorrowDishes.hide()
         self.lstTomorrowDishes.itemClicked.connect(self._on_open_suggestion_clicked)
@@ -1372,17 +1495,12 @@ class MainWindow(QMainWindow):
         self.pricelistActionsLayout = QHBoxLayout(self.pricelistActionsPanel)
         LayoutStyles.apply_margins(self.pricelistActionsLayout, LayoutStyles.CONTENT_TOP_MARGIN)
 
-        # 1) iikoChain-выгрузки ("Большой ценник") -> объединение
-        self.btnMergeChainPricetags = QPushButton("Объединить ценники (iikoChain)")
+        # Одна кнопка: выгрузка/объединение чёрных ценников iikoChain ("Большой ценник")
+        self.btnMergeChainPricetags = QPushButton("Выгрузить ценники")
         self.btnMergeChainPricetags.clicked.connect(self.do_merge_chain_pricetags)
-
-        # 2) Встроенный формат (openpyxl)
-        self.btnCreatePricelist = QPushButton("Сформировать ценники (Excel)")
-        self.btnCreatePricelist.clicked.connect(self.do_create_pricelist_excel)
 
         self.pricelistActionsLayout.addStretch(1)
         self.pricelistActionsLayout.addWidget(self.btnMergeChainPricetags)
-        self.pricelistActionsLayout.addWidget(self.btnCreatePricelist)
         self.rootLayout.addWidget(self.pricelistActionsPanel)
         self.pricelistActionsPanel.setVisible(False)
 
@@ -1440,6 +1558,12 @@ class MainWindow(QMainWindow):
         # Применяем компактный режим при узкой ширине окна (мобильный превью)
         try:
             self._apply_compact_mode(self.width() <= 480)
+        except Exception:
+            pass
+
+        # Останавливаем фоновые потоки при выходе приложения
+        try:
+            QApplication.instance().aboutToQuit.connect(self._shutdown_background_threads)
         except Exception:
             pass
 
@@ -1528,7 +1652,35 @@ class MainWindow(QMainWindow):
             pass
 
 
+    def _shutdown_background_threads(self):
+        """Безопасно останавливает фоновые QThread, чтобы не было 'QThread destroyed while thread is still running'."""
+        for attr in ("_iiko_products_load_thread", "_chain_pricetags_merge_thread"):
+            try:
+                th = getattr(self, attr, None)
+                if th is not None and th.isRunning():
+                    try:
+                        th.requestInterruption()
+                    except Exception:
+                        pass
+                    try:
+                        th.quit()
+                    except Exception:
+                        pass
+                    try:
+                        th.wait(15_000)
+                    except Exception:
+                        pass
+                try:
+                    _ACTIVE_THREADS.discard(th)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
     def closeEvent(self, event):
+        # При закрытии окна безопасно гасим фоновые потоки.
+        self._shutdown_background_threads()
+
         try:
             if hasattr(self, "_theme_timer") and self._theme_timer is not None:
                 self._theme_timer.stop()
@@ -2669,13 +2821,19 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
 
-                try:
-                    self.lstTomorrowDishes.move(gp)
-                except Exception:
-                    pass
+            try:
+                self.lstTomorrowDishes.move(gp)
+            except Exception:
+                pass
 
             self.lstTomorrowDishes.show()
             self.lstTomorrowDishes.raise_()
+
+            # удерживаем фокус в поле ввода, чтобы можно было продолжать печатать
+            try:
+                anchor.setFocus()
+            except Exception:
+                pass
 
         except Exception:
             pass
@@ -2957,6 +3115,12 @@ class MainWindow(QMainWindow):
 
             self.lstDishSuggestions.show()
             self.lstDishSuggestions.raise_()
+
+            # удерживаем фокус в поле ввода, чтобы можно было продолжать печатать
+            try:
+                anchor.setFocus()
+            except Exception:
+                pass
 
         except Exception:
             pass
@@ -3533,7 +3697,9 @@ class MainWindow(QMainWindow):
                     pass
             return
 
-        thread = QThread(self)
+        # Важно: не делаем QThread дочерним виджету. Если окно закроют во время загрузки,
+        # дочерний QThread может быть уничтожен "на ходу" и приложение вылетит.
+        thread = QThread()
         worker = IikoProductsLoadWorker(seq, snapshot)
         worker.moveToThread(thread)
 
@@ -3547,6 +3713,12 @@ class MainWindow(QMainWindow):
         worker.finished.connect(worker.deleteLater)
         worker.failed.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        # учёт активных потоков
+        try:
+            _ACTIVE_THREADS.add(thread)
+            thread.finished.connect(lambda: _ACTIVE_THREADS.discard(thread))
+        except Exception:
+            pass
 
         self._iiko_products_load_thread = thread
         self._iiko_products_load_worker = worker
@@ -3983,10 +4155,15 @@ class MainWindow(QMainWindow):
                 except Exception:
                     check_state = Qt.Checked
 
+                # по новому правилу: сняли галочку = удаляем из списка
+                if check_state != Qt.Checked:
+                    continue
+
                 rows.append((sort_key, line, d, check_state))
 
             rows.sort(key=lambda r: ((r[0] or ""), (r[1] or "")))
 
+            self._suppress_pricelist_selected_item_changed = True
             self.lstSelectedDishes.setUpdatesEnabled(False)
             try:
                 self.lstSelectedDishes.clear()
@@ -3998,10 +4175,14 @@ class MainWindow(QMainWindow):
                     self.lstSelectedDishes.addItem(it2)
             finally:
                 self.lstSelectedDishes.setUpdatesEnabled(True)
+                self._suppress_pricelist_selected_item_changed = False
 
             self._rebuild_pricelist_selected_keys_from_list()
         except Exception:
-            pass
+            try:
+                self._suppress_pricelist_selected_item_changed = False
+            except Exception:
+                pass
 
     # ===== Открыть блюда: поиск в iiko -> выбрать -> снять со стоп-листа =====
     def _format_iiko_product_line(self, p: Any) -> str:
@@ -4880,11 +5061,51 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
+    def _on_pricelist_selected_item_changed(self, item: QListWidgetItem) -> None:
+        if getattr(self, "_suppress_pricelist_selected_item_changed", False):
+            return
+
+        try:
+            if item.checkState() == Qt.Checked:
+                return
+
+            # сняли галочку => удаляем из списка
+            key = ""
+            try:
+                d = item.data(Qt.UserRole)
+                if isinstance(d, DishItem):
+                    key = self._pl_key(d.name)
+                else:
+                    line = (item.text() or "").strip()
+                    key = self._pl_key(line.split(" — ", 1)[0] if line else "")
+            except Exception:
+                key = ""
+
+            if key:
+                try:
+                    self._pricelist_selected_keys.discard(key)
+                except Exception:
+                    pass
+
+            try:
+                row = self.lstSelectedDishes.row(item)
+                if row >= 0:
+                    self.lstSelectedDishes.takeItem(row)
+            except Exception:
+                pass
+
+        except Exception:
+            pass
+
     def _clear_pricelist_selection(self):
         self.lstSelectedDishes.clear()
         self._pricelist_selected_keys = set()
 
     def do_create_pricelist_excel(self):
+        """Сформировать ценники (xlsx) и сохранить на Рабочий стол.
+
+        Без диалога выбора файла.
+        """
         try:
             # берем только отмеченные галочкой
             selected: List[DishItem] = []
@@ -4900,55 +5121,90 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Внимание", "Выберите хотя бы одно блюдо (поставьте галочку).")
                 return
 
-            # Предлагаем имя файла
             desktop = Path.home() / "Desktop"
-            stamp = datetime.now().strftime("%d.%m.%Y")
-            suggested_path = str(desktop / f"ценники_{stamp}.xlsx")
+            out_path = str(desktop / "ценники.xlsx")
 
-            save_path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Сохранить ценники",
-                suggested_path,
-                "Excel (*.xlsx);;Все файлы (*.*)",
-            )
-            if not save_path:
-                return
+            create_pricelist_xlsx(selected, out_path)
 
-            create_pricelist_xlsx(selected, save_path)
+            try:
+                QMessageBox.information(self, "Готово", f"Файл создан:\n{out_path}")
+            except Exception:
+                pass
+
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(out_path))
+            except Exception:
+                pass
+
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
     def do_merge_chain_pricetags(self):
-        """Объединить выгрузки iikoChain ("Большой ценник" в .xls/.xlsx) в один файл."""
+        """Выгрузить чёрные ценники по шаблону в один файл.
+
+        Сохраняем на Рабочий стол как "ценники.xls".
+        """
         try:
-            files, _ = QFileDialog.getOpenFileNames(
-                self,
-                "Выберите выгрузки ценников iikoChain",
-                str(Path.home() / "Desktop"),
-                "Excel (*.xls *.xlsx);;Все файлы (*.*)",
-            )
-            if not files:
+            # берем только отмеченные галочкой
+            selected_tags: List[TagData] = []
+            for i in range(self.lstSelectedDishes.count()):
+                it = self.lstSelectedDishes.item(i)
+                if it.checkState() != Qt.Checked:
+                    continue
+                d = it.data(Qt.UserRole)
+
+                if isinstance(d, DishItem):
+                    nm = (d.name or "").strip()
+                    if not nm:
+                        continue
+
+                    # на всякий случай обновим данные из загруженной номенклатуры (если выбранный объект старый)
+                    w = (d.weight if d.weight is not None else "")
+                    pr = (d.price if d.price is not None else "")
+                    desc = (d.description if d.description is not None else "")
+                    try:
+                        k = self._pl_key(nm)
+                        d2 = self._pricelist_dishes_exact.get(k)
+                        if isinstance(d2, DishItem):
+                            if not (w or "").strip():
+                                w = (d2.weight or "")
+                            if not (pr or "").strip():
+                                pr = (d2.price or "")
+                            if not (desc or "").strip():
+                                desc = (d2.description or "")
+                    except Exception:
+                        pass
+
+                    selected_tags.append(
+                        TagData(
+                            name=nm,
+                            weight=w,
+                            composition=desc,
+                            price=pr,
+                        )
+                    )
+                else:
+                    # fallback: строка вида "Название — вес — цена"
+                    raw = (it.text() or "").strip()
+                    if not raw:
+                        continue
+                    nm = raw.split(" — ", 1)[0].strip()
+                    if nm:
+                        selected_tags.append(TagData(name=nm))
+
+            if not selected_tags:
+                QMessageBox.warning(self, "Внимание", "Выберите хотя бы одно блюдо (поставьте галочку).")
                 return
 
             desktop = Path.home() / "Desktop"
-            stamp = datetime.now().strftime("%d.%m.%Y")
-            suggested_out = str(desktop / f"ценники_iikoChain_{stamp}.xls")
+            out_path = str(desktop / "ценники.xls")
 
-            save_path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Сохранить объединённые ценники",
-                suggested_out,
-                "Excel (*.xls *.xlsx);;Все файлы (*.*)",
-            )
-            if not save_path:
-                return
-
-            self._start_chain_pricetags_merge(files, save_path)
+            self._start_chain_pricetags_merge(selected_tags, out_path)
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
 
-    def _start_chain_pricetags_merge(self, input_paths: List[str], output_path: str) -> None:
-        """Старт объединения iikoChain ценников в фоне (QThread)."""
+    def _start_chain_pricetags_merge(self, tags: List[TagData], output_path: str) -> None:
+        """Старт формирования чёрных ценников в фоне (QThread)."""
         try:
             if getattr(self, "_chain_pricetags_merge_loading", False):
                 return
@@ -4958,7 +5214,20 @@ class MainWindow(QMainWindow):
             seq = int(self._chain_pricetags_merge_seq)
 
             try:
-                self.lblPricelistInfo.setText("Объединяю ценники iikoChain…")
+                missing_price = 0
+                try:
+                    for t in list(tags or []):
+                        pr = getattr(t, "price", None)
+                        pr_txt = "" if pr is None else str(pr).strip()
+                        if pr_txt == "":
+                            missing_price += 1
+                except Exception:
+                    missing_price = 0
+
+                if missing_price:
+                    self.lblPricelistInfo.setText(f"Формирую чёрные ценники… (без цены: {missing_price})")
+                else:
+                    self.lblPricelistInfo.setText("Формирую чёрные ценники…")
             except Exception:
                 pass
 
@@ -4968,8 +5237,9 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-            thread = QThread(self)
-            worker = ChainPriceTagsMergeWorker(seq, list(input_paths or []), str(output_path or ""))
+            # Аналогично: поток без parent, чтобы безопаснее переживать закрытие окна.
+            thread = QThread()
+            worker = ChainPriceTagsMergeWorker(seq, list(tags or []), str(output_path or ""))
             worker.moveToThread(thread)
 
             thread.started.connect(worker.run)
@@ -4981,6 +5251,11 @@ class MainWindow(QMainWindow):
             worker.finished.connect(worker.deleteLater)
             worker.failed.connect(worker.deleteLater)
             thread.finished.connect(thread.deleteLater)
+            try:
+                _ACTIVE_THREADS.add(thread)
+                thread.finished.connect(lambda: _ACTIVE_THREADS.discard(thread))
+            except Exception:
+                pass
 
             self._chain_pricetags_merge_thread = thread
             self._chain_pricetags_merge_worker = worker

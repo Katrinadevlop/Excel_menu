@@ -20,6 +20,7 @@ class IikoProduct:
     name: str
     price: str = ""
     weight: str = ""
+    description: str = ""
     product_id: str = ""
 
 
@@ -104,6 +105,9 @@ def _extract_price_value(raw: Any) -> str:
             "basePrice",
             "defaultPrice",
             "amount",
+            "defaultSalePrice",
+            "salePrice",
+            "sellingPrice",
         ):
             if k in raw and raw.get(k) not in (None, ""):
                 v = _extract_price_value(raw.get(k))
@@ -131,16 +135,31 @@ def _extract_price_from_product_dict(it: Dict[str, Any]) -> str:
         return ""
 
     # прямые ключи
-    for pk in ("price", "defaultPrice", "basePrice"):
+    for pk in (
+        "price",
+        "defaultPrice",
+        "basePrice",
+        "defaultSalePrice",
+        "salePrice",
+        "sellingPrice",
+        "menuPrice",
+    ):
         if pk in it and it.get(pk) not in (None, ""):
             v = _extract_price_value(it.get(pk))
             if v:
                 return v
 
+    # prices: часто список (берём первый)
+    pr_list = it.get("prices")
+    if isinstance(pr_list, list) and pr_list:
+        v = _extract_price_value(pr_list)
+        if v:
+            return v
+
     # sizePrices: берём первую цену
     sp = it.get("sizePrices")
-    if isinstance(sp, list) and sp and isinstance(sp[0], dict):
-        v = _extract_price_value(sp[0].get("price") or sp[0].get("value") or sp[0])
+    if isinstance(sp, list) and sp:
+        v = _extract_price_value(sp)
         if v:
             return v
 
@@ -151,6 +170,69 @@ def _extract_price_from_product_dict(it: Dict[str, Any]) -> str:
             p = _extract_price_from_product_dict(v)
             if p:
                 return p
+
+    return ""
+
+
+def _extract_description_value(raw: Any) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw.strip()
+    if isinstance(raw, (int, float)):
+        return _safe_str(raw)
+    if isinstance(raw, dict):
+        for k in ("description", "text", "value", "comment"):
+            if k in raw and raw.get(k) not in (None, ""):
+                s = _extract_description_value(raw.get(k))
+                if s:
+                    return s
+        return ""
+    if isinstance(raw, list):
+        for v in raw:
+            s = _extract_description_value(v)
+            if s:
+                return s
+        return ""
+    return _safe_str(raw)
+
+
+def _extract_description_from_product_dict(it: Dict[str, Any]) -> str:
+    """Пытается достать описание/состав блюда.
+
+    Поле может называться по-разному в разных версиях API.
+    """
+    if not isinstance(it, dict):
+        return ""
+
+    for k in (
+        "description",
+        "comment",
+        "composition",
+        "ingredients",
+        "descriptionForMenu",
+        "descriptionForSale",
+        "shortDescription",
+        "detailedDescription",
+        "marketingDescription",
+        "cookingDescription",
+        "cookDescription",
+        "details",
+        "info",
+        "additionalInfo",
+    ):
+        if k in it and it.get(k) not in (None, ""):
+            s = _extract_description_value(it.get(k))
+            if s:
+                return s
+
+    # иногда продукт лежит внутри обертки
+    for k in ("product", "item", "data", "entity"):
+        v = it.get(k)
+        if isinstance(v, dict):
+            s = _extract_description_from_product_dict(v)
+            if s:
+                return s
 
     return ""
 
@@ -383,8 +465,9 @@ class IikoRmsClient:
                 continue
 
             price = _extract_price_from_product_dict(it)
+            desc = _extract_description_from_product_dict(it)
             product_id = _extract_id_from_product_dict(it)
-            out.append(IikoProduct(name=name, price=price, product_id=product_id))
+            out.append(IikoProduct(name=name, price=price, description=desc, product_id=product_id))
 
         # Fallback: если почему-то вытащили подозрительно мало, пробуем рекурсивно найти продукты в ответе.
         # Это помогает, когда API меняет структуру и нужные поля лежат глубже.
@@ -396,7 +479,8 @@ class IikoRmsClient:
                 if not nm or not pid:
                     continue
                 pr = _extract_price_from_product_dict(dct)
-                extra.append(IikoProduct(name=nm, price=pr, product_id=pid))
+                desc = _extract_description_from_product_dict(dct)
+                extra.append(IikoProduct(name=nm, price=pr, description=desc, product_id=pid))
 
             if extra:
                 out.extend(extra)

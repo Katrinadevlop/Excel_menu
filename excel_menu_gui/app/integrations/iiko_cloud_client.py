@@ -28,7 +28,151 @@ def _safe_str(v: Any) -> str:
     return str(v).strip()
 
 
-def _redact_url(url: str) -> str:
+def _extract_description_value(raw: Any) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw.strip()
+    if isinstance(raw, (int, float)):
+        return _safe_str(raw)
+    if isinstance(raw, dict):
+        for k in ("description", "text", "value", "comment"):
+            if k in raw and raw.get(k) not in (None, ""):
+                s = _extract_description_value(raw.get(k))
+                if s:
+                    return s
+        return ""
+    if isinstance(raw, list):
+        for v in raw:
+            s = _extract_description_value(v)
+            if s:
+                return s
+        return ""
+    return _safe_str(raw)
+
+
+def _extract_description_from_product_dict(it: Dict[str, Any]) -> str:
+    if not isinstance(it, dict):
+        return ""
+
+    for k in (
+        "description",
+        "comment",
+        "composition",
+        "ingredients",
+        "descriptionForMenu",
+        "descriptionForSale",
+        "shortDescription",
+        "detailedDescription",
+        "marketingDescription",
+        "cookingDescription",
+        "cookDescription",
+        "details",
+        "info",
+        "additionalInfo",
+    ):
+        if k in it and it.get(k) not in (None, ""):
+            s = _extract_description_value(it.get(k))
+            if s:
+                return s
+
+    for k in ("product", "item", "data", "entity"):
+        v = it.get(k)
+        if isinstance(v, dict):
+            s = _extract_description_from_product_dict(v)
+            if s:
+                return s
+
+    return ""
+
+
+def _extract_price_value(raw: Any) -> str:
+    if raw is None:
+        return ""
+
+    if isinstance(raw, (int, float)):
+        if isinstance(raw, float) and raw.is_integer():
+            return str(int(raw))
+        return str(raw)
+
+    if isinstance(raw, str):
+        return raw.strip()
+
+    if isinstance(raw, dict):
+        for k in (
+            "currentPrice",
+            "value",
+            "price",
+            "basePrice",
+            "defaultPrice",
+            "amount",
+            "defaultSalePrice",
+            "salePrice",
+            "sellingPrice",
+        ):
+            if k in raw and raw.get(k) not in (None, ""):
+                v = _extract_price_value(raw.get(k))
+                if v:
+                    return v
+
+        for k in ("prices", "sizePrices"):
+            v = raw.get(k)
+            if isinstance(v, list) and v:
+                return _extract_price_value(v[0])
+
+        return ""
+
+    if isinstance(raw, list):
+        if not raw:
+            return ""
+        return _extract_price_value(raw[0])
+
+    return _safe_str(raw)
+
+
+def _extract_price_from_product_dict(it: Dict[str, Any]) -> str:
+    if not isinstance(it, dict):
+        return ""
+
+    # прямые ключи
+    for pk in (
+        "price",
+        "defaultPrice",
+        "basePrice",
+        "defaultSalePrice",
+        "salePrice",
+        "sellingPrice",
+        "menuPrice",
+    ):
+        if pk in it and it.get(pk) not in (None, ""):
+            v = _extract_price_value(it.get(pk))
+            if v:
+                return v
+
+    # prices: часто список (берём первый)
+    pr_list = it.get("prices")
+    if isinstance(pr_list, list) and pr_list:
+        v = _extract_price_value(pr_list)
+        if v:
+            return v
+
+    # sizePrices: берём первую цену
+    sp = it.get("sizePrices")
+    if isinstance(sp, list) and sp:
+        v = _extract_price_value(sp)
+        if v:
+            return v
+
+    # иногда продукт внутри обертки
+    for k in ("product", "item", "data", "entity"):
+        v = it.get(k)
+        if isinstance(v, dict):
+            p = _extract_price_from_product_dict(v)
+            if p:
+                return p
+
+    return ""
+
     try:
         parts = urlsplit(url)
         q = []
@@ -435,18 +579,10 @@ class IikoCloudClient:
 
             product_id = _safe_str(it.get("id") or it.get("productId"))
 
-            # цена: по возможности
-            price = ""
-            for pk in ("price", "defaultPrice", "basePrice"):
-                if it.get(pk) not in (None, ""):
-                    price = _safe_str(it.get(pk))
-                    break
-            if not price:
-                sp = it.get("sizePrices")
-                if isinstance(sp, list) and sp and isinstance(sp[0], dict):
-                    price = _safe_str(sp[0].get("price") or sp[0].get("value"))
+            price = _extract_price_from_product_dict(it)
 
-            out.append(IikoProduct(name=name, price=price, product_id=product_id))
+            desc = _extract_description_from_product_dict(it)
+            out.append(IikoProduct(name=name, price=price, description=desc, product_id=product_id))
 
         # uniq by name
         seen = set()

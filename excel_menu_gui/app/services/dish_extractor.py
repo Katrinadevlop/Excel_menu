@@ -38,26 +38,30 @@ class DishItem:
     """Представляет отдельное блюдо с базовой информацией.
     
     Данный класс содержит основную информацию о блюде:
-    название, вес, цену и категорию. Автоматически очищает
+    название, вес, цену, описание и категорию. Автоматически очищает
     и нормализует данные при создании объекта.
     
     Attributes:
         name (str): Название блюда
         weight (str): Вес или порция блюда (например, "150г", "1 шт")
         price (str): Цена блюда (например, "120 руб")
+        description (str): Описание/состав блюда (если есть)
         category (str): Категория блюда (завтрак, салат, первое, мясо, курица, рыба, гарнир)
     """
     name: str
     weight: str = ""
     price: str = ""
+    description: str = ""
     category: str = ""
     
     def __post_init__(self):
         # Очистка и нормализация данных при создании
-        self.name = str(self.name).strip()
-        self.weight = str(self.weight).strip() if self.weight else ""
-        self.price = str(self.price).strip() if self.price else ""
-        self.category = str(self.category).strip() if self.category else ""
+        # Важно: не используем "truthy" проверки (0/0.0 считаются False), проверяем именно на None.
+        self.name = str(self.name or "").strip()
+        self.weight = "" if self.weight is None else str(self.weight).strip()
+        self.price = "" if self.price is None else str(self.price).strip()
+        self.description = "" if self.description is None else str(self.description).strip()
+        self.category = "" if self.category is None else str(self.category).strip()
 
 
 @dataclass
