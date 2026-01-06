@@ -1145,10 +1145,13 @@ class MainWindow(QMainWindow):
         self.btnRefreshPricelist = QPushButton("Сформировать")
         self.btnRefreshPricelist.clicked.connect(self._run_pricelist_search)
 
-        self.btnExportPricelistSelected = QPushButton("Выгрузить прейскурант")
+        self.btnExportPricelistSelected = QPushButton("Выгрузить выбранные")
         self.btnExportPricelistSelected.clicked.connect(self._export_pricelist_selected)
 
-        self.btnPrintPricelistSelected = QPushButton("Печать выделенных")
+        self.btnExportPricelistFull = QPushButton("Выгрузить весь прейскурант")
+        self.btnExportPricelistFull.clicked.connect(self._export_pricelist_full)
+
+        self.btnPrintPricelistSelected = QPushButton("Печать выбранных")
         self.btnPrintPricelistSelected.clicked.connect(self._print_pricelist_selected)
 
         btns_row = QWidget(); btns_layout = QHBoxLayout(btns_row)
@@ -1158,6 +1161,7 @@ class MainWindow(QMainWindow):
         btns_layout.addWidget(QLabel("Дата:"))
         btns_layout.addWidget(self.pricelistDate)
         btns_layout.addWidget(self.btnRefreshPricelist)
+        btns_layout.addWidget(self.btnExportPricelistFull)
         btns_layout.addWidget(self.btnExportPricelistSelected)
         btns_layout.addWidget(self.btnPrintPricelistSelected)
         btns_layout.addStretch(1)
@@ -1883,6 +1887,44 @@ class MainWindow(QMainWindow):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_path)))
             except Exception:
                 pass
+        except Exception as e:
+            try:
+                QMessageBox.critical(self, "Ошибка", str(e))
+            except Exception:
+                pass
+
+    def _export_pricelist_full(self, *, _skip_load_check: bool = False):
+        """Выгрузить весь прейскурант (все блюда iiko) без предварительного выбора."""
+        try:
+            if not _skip_load_check and not getattr(self, "_iiko_products_loaded", False):
+                self._pending_full_pricelist_export = True
+                self._ensure_iiko_products_loaded_async(origin="pricelist", user_initiated=True)
+                QMessageBox.information(self, "Загрузка", "Загружаю блюда из iiko… выгрузка продолжится после загрузки.")
+                return
+
+            dishes = list(self._pricelist_dishes or [])
+            if not dishes:
+                QMessageBox.warning(self, "Пусто", "Список блюд пуст. Проверьте авторизацию iiko.")
+                return
+
+            qd = self.pricelistDate.date() if hasattr(self, "pricelistDate") else QDate.currentDate()
+            date_str = qd.toString("dd.MM.yyyy")
+            desktop = Path.home() / "Desktop"
+            fname = f"прейскурант_{date_str or 'меню'}.xlsx"
+            out_path = desktop / fname
+            title = f"Прейскурант на {date_str}" if date_str else None
+
+            create_pricelist_xlsx(dishes, str(out_path), title=title)
+
+            try:
+                QMessageBox.information(self, "Готово", f"Файл создан:\n{out_path}")
+            except Exception:
+                pass
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_path)))
+            except Exception:
+                pass
+
         except Exception as e:
             try:
                 QMessageBox.critical(self, "Ошибка", str(e))
@@ -4048,6 +4090,14 @@ class MainWindow(QMainWindow):
                 if hasattr(self, "grpTomorrowOpen") and self.grpTomorrowOpen.isVisible():
                     if len((self.edTomorrowSearch.text() or "").strip()) < 2 and not self.lstTomorrowDishes.isVisible():
                         self._set_tomorrow_info(self._format_open_schedule_status())
+            except Exception:
+                pass
+
+            # если ждали полного прейскуранта — делаем выгрузку после загрузки iiko
+            try:
+                if getattr(self, "_pending_full_pricelist_export", False):
+                    self._pending_full_pricelist_export = False
+                    self._export_pricelist_full(_skip_load_check=True)
             except Exception:
                 pass
 
