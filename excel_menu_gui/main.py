@@ -1137,17 +1137,14 @@ class MainWindow(QMainWindow):
         self.btnShowAllDishes = QPushButton("Показать все блюда")
         self.btnShowAllDishes.clicked.connect(self._show_all_pricelist_dishes)
 
-        # Дата для прейскуранта
+        # Дата/выгрузка/печать для прейскуранта в этой вкладке убраны по запросу
         self.pricelistDate = QDateEdit(QDate.currentDate())
         self.pricelistDate.setDisplayFormat("dd.MM.yyyy")
         self.pricelistDate.setCalendarPopup(True)
-
         self.btnRefreshPricelist = QPushButton("Сформировать")
         self.btnRefreshPricelist.clicked.connect(self._run_pricelist_search)
-
         self.btnExportPricelistSelected = QPushButton("Выгрузить прейскурант")
         self.btnExportPricelistSelected.clicked.connect(self._export_pricelist_selected)
-
         self.btnPrintPricelistSelected = QPushButton("Печать выделенных")
         self.btnPrintPricelistSelected.clicked.connect(self._print_pricelist_selected)
 
@@ -1155,11 +1152,6 @@ class MainWindow(QMainWindow):
         LayoutStyles.apply_margins(btns_layout, LayoutStyles.NO_MARGINS)
         btns_layout.addWidget(self.btnLoadDishes)
         btns_layout.addWidget(self.btnShowAllDishes)
-        btns_layout.addWidget(QLabel("Дата:"))
-        btns_layout.addWidget(self.pricelistDate)
-        btns_layout.addWidget(self.btnRefreshPricelist)
-        btns_layout.addWidget(self.btnExportPricelistSelected)
-        btns_layout.addWidget(self.btnPrintPricelistSelected)
         btns_layout.addStretch(1)
 
         # Подсказки/список блюд (выпадающий список поверх UI — не в layout)
