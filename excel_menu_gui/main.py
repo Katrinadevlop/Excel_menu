@@ -1137,10 +1137,29 @@ class MainWindow(QMainWindow):
         self.btnShowAllDishes = QPushButton("Показать все блюда")
         self.btnShowAllDishes.clicked.connect(self._show_all_pricelist_dishes)
 
+        # Дата для прейскуранта
+        self.pricelistDate = QDateEdit(QDate.currentDate())
+        self.pricelistDate.setDisplayFormat("dd.MM.yyyy")
+        self.pricelistDate.setCalendarPopup(True)
+
+        self.btnRefreshPricelist = QPushButton("Сформировать")
+        self.btnRefreshPricelist.clicked.connect(self._run_pricelist_search)
+
+        self.btnExportPricelistSelected = QPushButton("Выгрузить прейскурант")
+        self.btnExportPricelistSelected.clicked.connect(self._export_pricelist_selected)
+
+        self.btnPrintPricelistSelected = QPushButton("Печать выделенных")
+        self.btnPrintPricelistSelected.clicked.connect(self._print_pricelist_selected)
+
         btns_row = QWidget(); btns_layout = QHBoxLayout(btns_row)
         LayoutStyles.apply_margins(btns_layout, LayoutStyles.NO_MARGINS)
         btns_layout.addWidget(self.btnLoadDishes)
         btns_layout.addWidget(self.btnShowAllDishes)
+        btns_layout.addWidget(QLabel("Дата:"))
+        btns_layout.addWidget(self.pricelistDate)
+        btns_layout.addWidget(self.btnRefreshPricelist)
+        btns_layout.addWidget(self.btnExportPricelistSelected)
+        btns_layout.addWidget(self.btnPrintPricelistSelected)
         btns_layout.addStretch(1)
 
         # Подсказки/список блюд (выпадающий список поверх UI — не в layout)
@@ -1816,6 +1835,86 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Колонка", str(e))
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _get_checked_pricelist_dishes(self) -> List[DishItem]:
+        selected: List[DishItem] = []
+        try:
+            for i in range(self.lstSelectedDishes.count()):
+                it = self.lstSelectedDishes.item(i)
+                if it.checkState() != Qt.Checked:
+                    continue
+                d = it.data(Qt.UserRole)
+                if isinstance(d, DishItem):
+                    selected.append(d)
+                else:
+                    nm = (it.text() or "").strip()
+                    if nm:
+                        selected.append(DishItem(name=nm))
+        except Exception:
+            pass
+        return selected
+
+    def _export_pricelist_selected(self):
+        """Выгрузить прейскурант по отмеченным блюдам (вкладка Ценники)."""
+        try:
+            dishes = self._get_checked_pricelist_dishes()
+            if not dishes:
+                QMessageBox.information(self, "Нет выбора", "Отметьте блюда галочкой.")
+                return
+
+            try:
+                qd = self.pricelistDate.date() if hasattr(self, "pricelistDate") else QDate.currentDate()
+                date_str = qd.toString("dd.MM.yyyy")
+            except Exception:
+                date_str = ""
+
+            desktop = Path.home() / "Desktop"
+            fname = f"прейскурант_{date_str or 'меню'}.xlsx"
+            out_path = desktop / fname
+            title = f"Прейскурант на {date_str}" if date_str else None
+
+            create_pricelist_xlsx(dishes, str(out_path), title=title)
+
+            try:
+                QMessageBox.information(self, "Готово", f"Файл создан:\n{out_path}")
+            except Exception:
+                pass
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_path)))
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                QMessageBox.critical(self, "Ошибка", str(e))
+            except Exception:
+                pass
+
+    def _print_pricelist_selected(self):
+        """Печать выделенных: выгрузка в xlsx и открытие для печати/предпросмотра."""
+        try:
+            dishes = self._get_checked_pricelist_dishes()
+            if not dishes:
+                QMessageBox.information(self, "Нет выбора", "Отметьте блюда галочкой.")
+                return
+
+            qd = self.pricelistDate.date() if hasattr(self, "pricelistDate") else QDate.currentDate()
+            date_str = qd.toString("dd.MM.yyyy")
+            desktop = Path.home() / "Desktop"
+            fname = f"прейскурант_печать_{date_str or 'меню'}.xlsx"
+            out_path = desktop / fname
+            title = f"Прейскурант на {date_str}" if date_str else None
+
+            create_pricelist_xlsx(dishes, str(out_path), title=title)
+
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_path)))
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                QMessageBox.critical(self, "Ошибка", str(e))
+            except Exception:
+                pass
 
     def _open_now_checked(self) -> None:
         """Открыть отмеченные блюда прямо сейчас (без расписания), предупредить если не найден product_id."""
