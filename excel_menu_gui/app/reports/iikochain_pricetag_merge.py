@@ -95,6 +95,20 @@ def _to_text(v: Any) -> str:
 def _format_name(name: Any, weight: Any = "") -> str:
     n = _to_text(name)
     w = _to_text(weight)
+    # нормализуем вес: убираем "*" и приводим "г" -> "гр"
+    if w:
+        try:
+            import re
+
+            w_clean = w.replace("*", "").strip()
+            # если заканчивается на "г" без "р" перед ним -> заменить на "гр"
+            if re.search(r"(?i)(?:^|\\s)(\\d+\\s*)г$", w_clean):
+                w_clean = re.sub(r"(?i)(\\d+)\\s*г$", r"\\1 гр", w_clean)
+            # если просто одиночное "г" внутри
+            w_clean = re.sub(r"(?i)\\bг\\b", "гр", w_clean)
+            w = w_clean.strip()
+        except Exception:
+            w = w.replace("*", "").strip()
     if not n:
         return ""
     if w:
