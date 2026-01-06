@@ -1508,9 +1508,12 @@ class MainWindow(QMainWindow):
         self.tomorrowOpenActionsPanel = QWidget(); self.tomorrowOpenActionsPanel.setObjectName("actionsPanel")
         self.tomorrowOpenActionsLayout = QHBoxLayout(self.tomorrowOpenActionsPanel)
         LayoutStyles.apply_margins(self.tomorrowOpenActionsLayout, LayoutStyles.CONTENT_TOP_MARGIN)
-        self.btnOpenTomorrowChecked = QPushButton("Открыть отмеченные")
+        self.btnOpenTomorrowChecked = QPushButton("Открыть отмеченные (по дате)")
         self.btnOpenTomorrowChecked.clicked.connect(self._open_tomorrow_checked)
+        self.btnOpenNowChecked = QPushButton("Открыть отмеченные сейчас")
+        self.btnOpenNowChecked.clicked.connect(self._open_now_checked)
         self.tomorrowOpenActionsLayout.addStretch(1)
+        self.tomorrowOpenActionsLayout.addWidget(self.btnOpenNowChecked)
         self.tomorrowOpenActionsLayout.addWidget(self.btnOpenTomorrowChecked)
         self.rootLayout.addWidget(self.tomorrowOpenActionsPanel)
         self.tomorrowOpenActionsPanel.setVisible(False)
@@ -1813,6 +1816,67 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Колонка", str(e))
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", str(e))
+
+    def _open_now_checked(self) -> None:
+        """Открыть отмеченные блюда прямо сейчас (без расписания), предупредить если не найден product_id."""
+        try:
+            if not hasattr(self, "lstTomorrowSelectedDishes"):
+                return
+
+            items: List[QListWidgetItem] = []
+            missing: List[str] = []
+            for i in range(self.lstTomorrowSelectedDishes.count()):
+                it = self.lstTomorrowSelectedDishes.item(i)
+                if it.checkState() != Qt.Checked:
+                    continue
+                pid = (it.data(Qt.UserRole) or "").strip()
+                name = (it.data(Qt.UserRole + 2) or it.text() or "").strip()
+                if not pid:
+                    missing.append(name or "(без названия)")
+                    continue
+                items.append(it)
+
+            if not items and missing:
+                QMessageBox.warning(self, "Не найдено в iiko", "У отмеченных блюд нет product_id:\n" + "\n".join(missing))
+                return
+            if not items:
+                QMessageBox.information(self, "Нет выбора", "Отметьте блюда галочкой.")
+                return
+
+            opened = 0
+            errors = []
+            for it in items:
+                try:
+                    self._open_one_tomorrow_item(it)
+                    self._suppress_tomorrow_item_changed = True
+                    base_name = (it.data(Qt.UserRole + 2) or it.text() or "")
+                    it.setData(Qt.UserRole + 1, "opened")
+                    it.setForeground(QBrush(QColor("#2e7d32")))
+                    it.setText(f"{base_name}  (ОТКРЫТО)")
+                    it.setCheckState(Qt.Checked)
+                    opened += 1
+                finally:
+                    self._suppress_tomorrow_item_changed = False
+        except IikoApiError as e:
+            errors.append(str(e))
+        except Exception as e:
+            errors.append(str(e))
+        finally:
+            if missing:
+                try:
+                    QMessageBox.warning(self, "Не найдено в iiko", "У отмеченных блюд нет product_id:\n" + "\n".join(missing))
+                except Exception:
+                    pass
+            if errors:
+                try:
+                    QMessageBox.critical(self, "Ошибка", "\n".join(errors))
+                except Exception:
+                    pass
+            else:
+                try:
+                    QMessageBox.information(self, "Готово", f"Открыто блюд: {opened}")
+                except Exception:
+                    pass
 
     def show_compare_sections(self):
         try:
