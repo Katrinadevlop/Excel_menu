@@ -1145,13 +1145,10 @@ class MainWindow(QMainWindow):
         self.btnRefreshPricelist = QPushButton("Сформировать")
         self.btnRefreshPricelist.clicked.connect(self._run_pricelist_search)
 
-        self.btnExportPricelistSelected = QPushButton("Выгрузить выбранные")
+        self.btnExportPricelistSelected = QPushButton("Выгрузить прейскурант")
         self.btnExportPricelistSelected.clicked.connect(self._export_pricelist_selected)
 
-        self.btnExportPricelistFull = QPushButton("Выгрузить весь прейскурант")
-        self.btnExportPricelistFull.clicked.connect(self._export_pricelist_full)
-
-        self.btnPrintPricelistSelected = QPushButton("Печать выбранных")
+        self.btnPrintPricelistSelected = QPushButton("Печать выделенных")
         self.btnPrintPricelistSelected.clicked.connect(self._print_pricelist_selected)
 
         btns_row = QWidget(); btns_layout = QHBoxLayout(btns_row)
@@ -1161,7 +1158,6 @@ class MainWindow(QMainWindow):
         btns_layout.addWidget(QLabel("Дата:"))
         btns_layout.addWidget(self.pricelistDate)
         btns_layout.addWidget(self.btnRefreshPricelist)
-        btns_layout.addWidget(self.btnExportPricelistFull)
         btns_layout.addWidget(self.btnExportPricelistSelected)
         btns_layout.addWidget(self.btnPrintPricelistSelected)
         btns_layout.addStretch(1)
@@ -1535,8 +1531,14 @@ class MainWindow(QMainWindow):
         self.btnOpenNowChecked.clicked.connect(self._open_now_checked)
         self.btnExportPricelist = QPushButton("Выгрузить прейскурант")
         self.btnExportPricelist.clicked.connect(self._export_tomorrow_pricelist)
+        self.btnExportPricelistFullOpen = QPushButton("Выгрузить весь прейскурант")
+        self.btnExportPricelistFullOpen.clicked.connect(self._export_open_pricelist_full)
+        self.btnPrintOpenSelected = QPushButton("Печать выделенных")
+        self.btnPrintOpenSelected.clicked.connect(self._print_open_selected)
         self.tomorrowOpenActionsLayout.addStretch(1)
         self.tomorrowOpenActionsLayout.addWidget(self.btnExportPricelist)
+        self.tomorrowOpenActionsLayout.addWidget(self.btnExportPricelistFullOpen)
+        self.tomorrowOpenActionsLayout.addWidget(self.btnPrintOpenSelected)
         self.tomorrowOpenActionsLayout.addWidget(self.btnOpenNowChecked)
         self.rootLayout.addWidget(self.tomorrowOpenActionsPanel)
         self.tomorrowOpenActionsPanel.setVisible(False)
@@ -1893,43 +1895,8 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-    def _export_pricelist_full(self, *, _skip_load_check: bool = False):
-        """Выгрузить весь прейскурант (все блюда iiko) без предварительного выбора."""
-        try:
-            if not _skip_load_check and not getattr(self, "_iiko_products_loaded", False):
-                self._pending_full_pricelist_export = True
-                self._ensure_iiko_products_loaded_async(origin="pricelist", user_initiated=True)
-                QMessageBox.information(self, "Загрузка", "Загружаю блюда из iiko… выгрузка продолжится после загрузки.")
-                return
-
-            dishes = list(self._pricelist_dishes or [])
-            if not dishes:
-                QMessageBox.warning(self, "Пусто", "Список блюд пуст. Проверьте авторизацию iiko.")
-                return
-
-            qd = self.pricelistDate.date() if hasattr(self, "pricelistDate") else QDate.currentDate()
-            date_str = qd.toString("dd.MM.yyyy")
-            desktop = Path.home() / "Desktop"
-            fname = f"прейскурант_{date_str or 'меню'}.xlsx"
-            out_path = desktop / fname
-            title = f"Прейскурант на {date_str}" if date_str else None
-
-            create_pricelist_xlsx(dishes, str(out_path), title=title)
-
-            try:
-                QMessageBox.information(self, "Готово", f"Файл создан:\n{out_path}")
-            except Exception:
-                pass
-            try:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_path)))
-            except Exception:
-                pass
-
-        except Exception as e:
-            try:
-                QMessageBox.critical(self, "Ошибка", str(e))
-            except Exception:
-                pass
+    def _export_pricelist_full(self, *_args, **_kwargs):
+        QMessageBox.information(self, "Недоступно", "Выгрузка всего прейскуранта доступна только на вкладке 'Открыть блюда'.")
 
     def _print_pricelist_selected(self):
         """Печать выделенных: выгрузка в xlsx и открытие для печати/предпросмотра."""
@@ -4092,14 +4059,14 @@ class MainWindow(QMainWindow):
                         self._set_tomorrow_info(self._format_open_schedule_status())
             except Exception:
                 pass
-
-            # если ждали полного прейскуранта — делаем выгрузку после загрузки iiko
+            # Если ждали полного прейскуранта (вкладка Открыть блюда) — выгружаем после загрузки iiko
             try:
-                if getattr(self, "_pending_full_pricelist_export", False):
-                    self._pending_full_pricelist_export = False
-                    self._export_pricelist_full(_skip_load_check=True)
+                if getattr(self, "_pending_full_pricelist_export_open", False):
+                    self._pending_full_pricelist_export_open = False
+                    self._export_open_pricelist_full()
             except Exception:
                 pass
+
 
         except Exception as e:
             self._on_iiko_products_load_failed(int(seq), str(e))
@@ -4701,6 +4668,102 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._open_selected_ids = set()
+
+    def _get_checked_open_dishes(self) -> List[DishItem]:
+        out: List[DishItem] = []
+        try:
+            for i in range(self.lstTomorrowSelectedDishes.count()):
+                it = self.lstTomorrowSelectedDishes.item(i)
+                if it.checkState() != Qt.Checked:
+                    continue
+                d = it.data(Qt.UserRole + 4)
+                if isinstance(d, DishItem):
+                    out.append(d)
+                else:
+                    nm = (it.data(Qt.UserRole + 2) or it.text() or "").strip()
+                    if nm:
+                        out.append(DishItem(name=nm))
+        except Exception:
+            pass
+        return out
+
+    def _export_open_pricelist_full(self):
+        """Выгрузить весь прейскурант (все блюда iiko) без выбора."""
+        try:
+            if not getattr(self, "_iiko_products_loaded", False):
+                self._pending_full_pricelist_export_open = True
+                self._ensure_iiko_products_loaded_async(origin="open", user_initiated=True)
+                QMessageBox.information(self, "Загрузка", "Загружаю блюда из iiko… выгрузка продолжится после загрузки.")
+                return
+
+            dishes: List[DishItem] = []
+            try:
+                for p in self._open_iiko_products:
+                    nm = (getattr(p, "name", "") or "").strip()
+                    if not nm:
+                        continue
+                    dishes.append(
+                        DishItem(
+                            name=nm,
+                            weight=(getattr(p, "weight", "") or ""),
+                            price=(getattr(p, "price", "") or ""),
+                            description=(getattr(p, "description", "") or ""),
+                        )
+                    )
+            except Exception:
+                dishes = []
+
+            if not dishes:
+                QMessageBox.warning(self, "Пусто", "Список блюд пуст. Проверьте авторизацию iiko.")
+                return
+
+            qd = self.calOpenDate.selectedDate() if hasattr(self, "calOpenDate") else QDate.currentDate()
+            date_str = qd.toString("dd.MM.yyyy")
+            desktop = Path.home() / "Desktop"
+            fname = f"прейскурант_{date_str or 'меню'}.xlsx"
+            out_path = desktop / fname
+            title = f"Прейскурант на {date_str}" if date_str else None
+
+            create_pricelist_xlsx(dishes, str(out_path), title=title)
+            try:
+                QMessageBox.information(self, "Готово", f"Файл создан:\n{out_path}")
+            except Exception:
+                pass
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_path)))
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                QMessageBox.critical(self, "Ошибка", str(e))
+            except Exception:
+                pass
+
+    def _print_open_selected(self):
+        """Печать выбранных блюд (вкладка Открыть блюда)."""
+        try:
+            dishes = self._get_checked_open_dishes()
+            if not dishes:
+                QMessageBox.information(self, "Нет выбора", "Отметьте блюда галочкой.")
+                return
+
+            qd = self.calOpenDate.selectedDate() if hasattr(self, "calOpenDate") else QDate.currentDate()
+            date_str = qd.toString("dd.MM.yyyy")
+            desktop = Path.home() / "Desktop"
+            fname = f"прейскурант_печать_{date_str or 'меню'}.xlsx"
+            out_path = desktop / fname
+            title = f"Прейскурант на {date_str}" if date_str else None
+
+            create_pricelist_xlsx(dishes, str(out_path), title=title)
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_path)))
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                QMessageBox.critical(self, "Ошибка", str(e))
+            except Exception:
+                pass
 
     # ===== Открытие блюд на завтра (Excel -> iiko stoplist) =====
     def _load_tomorrow_dishes_from_excel(self):
