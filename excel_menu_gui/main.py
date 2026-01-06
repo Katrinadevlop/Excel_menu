@@ -113,7 +113,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QBoxLayout,
     QLabel, QPushButton, QFileDialog, QTextEdit, QComboBox, QLineEdit,
     QGroupBox, QCheckBox, QSpinBox, QRadioButton, QButtonGroup, QMessageBox, QFrame, QSizePolicy, QScrollArea,
-    QListWidget, QListWidgetItem, QInputDialog, QDialog, QDialogButtonBox, QCalendarWidget,
+    QListWidget, QListWidgetItem, QInputDialog, QDialog, QDialogButtonBox, QCalendarWidget, QDateEdit,
 )
 
 from app.services.comparator import compare_and_highlight, get_sheet_names, ColumnParseError
