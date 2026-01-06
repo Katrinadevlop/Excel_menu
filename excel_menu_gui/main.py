@@ -1508,13 +1508,13 @@ class MainWindow(QMainWindow):
         self.tomorrowOpenActionsPanel = QWidget(); self.tomorrowOpenActionsPanel.setObjectName("actionsPanel")
         self.tomorrowOpenActionsLayout = QHBoxLayout(self.tomorrowOpenActionsPanel)
         LayoutStyles.apply_margins(self.tomorrowOpenActionsLayout, LayoutStyles.CONTENT_TOP_MARGIN)
-        self.btnOpenTomorrowChecked = QPushButton("Открыть отмеченные (по дате)")
-        self.btnOpenTomorrowChecked.clicked.connect(self._open_tomorrow_checked)
         self.btnOpenNowChecked = QPushButton("Открыть отмеченные сейчас")
         self.btnOpenNowChecked.clicked.connect(self._open_now_checked)
+        self.btnExportPricelist = QPushButton("Выгрузить прейскурант")
+        self.btnExportPricelist.clicked.connect(self._export_tomorrow_pricelist)
         self.tomorrowOpenActionsLayout.addStretch(1)
+        self.tomorrowOpenActionsLayout.addWidget(self.btnExportPricelist)
         self.tomorrowOpenActionsLayout.addWidget(self.btnOpenNowChecked)
-        self.tomorrowOpenActionsLayout.addWidget(self.btnOpenTomorrowChecked)
         self.rootLayout.addWidget(self.tomorrowOpenActionsPanel)
         self.tomorrowOpenActionsPanel.setVisible(False)
 
@@ -1877,6 +1877,68 @@ class MainWindow(QMainWindow):
                     QMessageBox.information(self, "Готово", f"Открыто блюд: {opened}")
                 except Exception:
                     pass
+
+    def _export_tomorrow_pricelist(self) -> None:
+        """Выгрузить прейскурант по отмеченным блюдам (вкладка 'Открыть блюда')."""
+        try:
+            if not hasattr(self, "lstTomorrowSelectedDishes"):
+                return
+
+            selected: List[DishItem] = []
+            missing: List[str] = []
+            for i in range(self.lstTomorrowSelectedDishes.count()):
+                it = self.lstTomorrowSelectedDishes.item(i)
+                if it.checkState() != Qt.Checked:
+                    continue
+                d = it.data(Qt.UserRole + 4)
+                if isinstance(d, DishItem):
+                    selected.append(d)
+                else:
+                    nm = (it.data(Qt.UserRole + 2) or it.text() or "").strip()
+                    if nm:
+                        selected.append(DishItem(name=nm))
+                    else:
+                        missing.append("(без названия)")
+
+            if not selected:
+                QMessageBox.information(self, "Нет выбора", "Отметьте блюда галочками для выгрузки прейскуранта.")
+                return
+
+            # дата из календаря (используем для названия файла/заголовка)
+            try:
+                qd = self.calOpenDate.selectedDate()
+                date_str = qd.toString("dd.MM.yyyy")
+            except Exception:
+                date_str = ""
+
+            desktop = Path.home() / "Desktop"
+            fname = f"прейскурант_{date_str or 'меню'}.xlsx"
+            out_path = desktop / fname
+
+            title = f"Прейскурант на {date_str}" if date_str else None
+            create_pricelist_xlsx(selected, str(out_path), title=title)
+
+            try:
+                QMessageBox.information(self, "Готово", f"Файл создан:\n{out_path}")
+            except Exception:
+                pass
+
+            try:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(out_path)))
+            except Exception:
+                pass
+
+            if missing:
+                try:
+                    QMessageBox.warning(self, "Пропущены блюда", "Не удалось выгрузить:\n" + "\n".join(missing))
+                except Exception:
+                    pass
+
+        except Exception as e:
+            try:
+                QMessageBox.critical(self, "Ошибка", str(e))
+            except Exception:
+                pass
 
     def show_compare_sections(self):
         try:
@@ -4537,6 +4599,7 @@ class MainWindow(QMainWindow):
                 it.setData(Qt.UserRole, pid)
                 it.setData(Qt.UserRole + 1, "ready" if pid else "not_found")
                 it.setData(Qt.UserRole + 2, name)
+                it.setData(Qt.UserRole + 4, d)  # сохраняем DishItem для прейскуранта
 
                 if pid:
                     it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
