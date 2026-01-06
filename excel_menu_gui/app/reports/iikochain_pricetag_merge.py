@@ -93,41 +93,36 @@ def _to_text(v: Any) -> str:
 
 
 def _format_name(name: Any, weight: Any = "") -> str:
-    n = _to_text(name)
-    w = _to_text(weight)
-    # нормализуем вес: убираем "*" и приводим "г" -> "гр"
+    # нормализуем вес: убираем "*" и приводим "г"/"г*" -> "гр"
     def _norm_weight_text(text: str) -> str:
         try:
             import re
 
             t = (text or "").strip()
-            # убираем любые звездочки
             t = t.replace("*", "")
-            # 100г* / 100 г* / 100г -> 100 гр
-            t = re.sub(r"(?i)(\\d+)\\s*г\\*?\\b", r"\\1 гр", t)
+            # 100г* / 100 г* / 100г / 100 г -> 100 гр
+            t = re.sub(r"(?i)(\d+)\s*г\*?\b", r"\1 гр", t)
             # одиночное "г" или "г*" -> "гр"
-            t = re.sub(r"(?i)\\bг\\*?\\b", "гр", t)
+            t = re.sub(r"(?i)\bг\*?\b", "гр", t)
             # двойные пробелы -> один
             t = " ".join(t.split())
             return t.strip()
         except Exception:
             return (text or "").replace("*", "").strip()
 
-    w = _norm_weight_text(w)
+    n = _norm_weight_text(_to_text(name))
+    w = _norm_weight_text(_to_text(weight))
+
     if not n:
         return ""
+
+    full = n
     if w:
-        # avoid duplicating weight if it's already part of the name
+        # avoid duplicating weight if it's already part of the name (after normalization)
         if w.lower() not in n.lower():
             full = f"{n} {w}".strip()
-        else:
-            full = n
-    else:
-        full = n
 
-    # даже если вес уже был внутри названия, нормализуем там "г"/"*"
-    full = _norm_weight_text(full)
-    return full
+    return _norm_weight_text(full)
 
 
 def _format_price(price: Any) -> str:
